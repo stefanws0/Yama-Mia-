@@ -76,7 +76,10 @@ src/test/java/com/yamareviewer/
   testing/KillLogBuilder.java      (modify) P3 helper methods
   testing/Fights.java              a fight skeleton through to P3 and matching PhaseTimes
   testing/TestContext.java         ProjectionContext with sections put by hand
+  testing/P3Reviews.java           KillReviews with the Part 3 sections filled by hand
   domain/drain/…, domain/review/…, domain/outcome/…, domain/projection/…, domain/text/…, domain/history/… tests
+  tools/RawLogs.java               read and write one raw log through the production codec
+  tools/FixtureScrubber.java       replaces player names and drops OTHER-actor events before a log becomes a fixture
   tools/Replay.java                (replace) also writes the review JSON for a golden fixture
   GoldenReviewTest.java            replays every fixture and compares with its expected JSON
 src/test/resources/fixtures/       raw logs of the logging kills and their expected review JSON (last task)
@@ -4106,3 +4109,2936 @@ git commit -m "feat: log every P3 attack with its gap and the events in between"
 ```
 
 ---
+
+### Task 11: Crashes projection
+
+**Files:**
+- Create: `src/main/java/com/yamareviewer/domain/projection/CrashesProjection.java`
+- Test: `src/test/java/com/yamareviewer/domain/projection/CrashesProjectionTest.java`
+
+**Interfaces:**
+- Consumes: `GroundGraphicObserved`, `GraphicObserved`, `HitsplatObserved`, `TickState`, `Position` (Part 1), `Rules.getCrashImpactWindow()`, `getCrashSetGap()`, `CrashLine`, `CrashSummary`, `AttackTimeline` (Task 2), `Upstream`, `PhaseLookup` (Task 5).
+- Produces: `CrashesProjection` (key `CRASHES`, requires `CRASH_FIREBALL`; `CRASH_IMPACT` is optional evidence; hides with the reason of a hidden `ATTACKS`; reviews lines in every phase, so the acquisition contracts need no special case here). Package-private `static Set<String> standardLandings(AttackTimeline)` ("tick/actor" keys) reused by the waves projection and the damage rules.
+
+- [ ] **Step 1: Write the failing test**
+
+`src/test/java/com/yamareviewer/domain/projection/CrashesProjectionTest.java`:
+
+```java
+package com.yamareviewer.domain.projection;
+
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.event.Position;
+import com.yamareviewer.domain.ids.Role;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.model.Phase;
+import com.yamareviewer.domain.model.Style;
+import com.yamareviewer.domain.review.AttackTimeline;
+import com.yamareviewer.domain.review.CrashLine;
+import com.yamareviewer.domain.review.CrashSummary;
+import com.yamareviewer.domain.review.HiddenReason;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.KillLogBuilder;
+import com.yamareviewer.testing.TestContext;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import org.junit.Test;
+
+public class CrashesProjectionTest
+{
+	private final CrashesProjection projection = new CrashesProjection();
+
+	private CrashSummary crashes(KillLog log, ProjectionContext context)
+	{
+		context.put(Sections.ATTACKS, new AttacksProjection().project(log, context));
+		return projection.project(log, context).value();
+	}
+
+	@Test
+	public void keyAndRoles()
+	{
+		assertEquals(Sections.CRASHES, projection.key());
+		assertEquals(Set.of(Role.CRASH_FIREBALL), projection.requiredRoles());
+	}
+
+	@Test
+	public void aLineIsDodgedWhenNothingHitsWithinTheWindow()
+	{
+		KillLog log = Fights.throughToP3().ticks(3).crashLine(3200, 3205).ticks(2).hitsplatOn(Actor.SELF, 9).ticks(3).end(EndReason.YAMA_DIED);
+
+		CrashSummary summary = crashes(log, TestContext.withPhases(48));
+
+		assertEquals(List.of(new CrashLine(43, Phase.P3, Actor.SELF, 1, 1, new Position(3200, 3205, 0), false, 0)), summary.getLines());
+		assertEquals(1, summary.dodged(Actor.SELF));
+	}
+
+	@Test
+	public void aLineIsHitByTheImpactGraphicOrByANonStandardHitsplat()
+	{
+		KillLogBuilder kill = Fights.throughToP3().ticks(3);
+		kill.crashLine(3200, 3205).ticks(1).crashImpactOn(Actor.SELF).hitsplatOn(Actor.SELF, 12).ticks(3);
+		kill.crashLine(3200, 3206).ticks(1).hitsplatOn(Actor.SELF, 10).ticks(3);
+		KillLog log = kill.end(EndReason.YAMA_DIED);
+
+		CrashSummary summary = crashes(log, TestContext.withPhases(51));
+
+		assertEquals(List.of(true, true), summary.getLines().stream().map(CrashLine::isHit).collect(Collectors.toList()));
+		assertEquals(List.of(12, 10), summary.getLines().stream().map(CrashLine::getDamage).collect(Collectors.toList()));
+		assertEquals(0, summary.dodged(Actor.SELF));
+		assertEquals(22, summary.damage(Actor.SELF));
+	}
+
+	@Test
+	public void aStandardAttacksLandingHitsplatIsNotACrashHit()
+	{
+		KillLog log = Fights.throughToP3().yamaCasts(Style.MAGIC).ticks(2).impactOn(Actor.SELF, Style.MAGIC).hitsplatOn(Actor.SELF, 2)
+			.crashLine(3200, 3203).ticks(5).end(EndReason.YAMA_DIED);
+
+		CrashSummary summary = crashes(log, TestContext.withPhases(47));
+
+		assertFalse(summary.getLines().get(0).isHit());
+	}
+
+	@Test
+	public void linesWithinTheSetGapFormASetAndALaterLineStartsTheNext()
+	{
+		KillLogBuilder kill = Fights.throughToP3().ticks(3);
+		kill.crashLine(3200, 3205).ticks(4).crashLine(3203, 3205).ticks(4).crashLine(3200, 3208).ticks(29);
+		kill.crashLine(3200, 3205).ticks(2);
+		KillLog log = kill.end(EndReason.YAMA_DIED);
+
+		CrashSummary summary = crashes(log, TestContext.withPhases(82));
+
+		assertEquals(List.of(1, 1, 1, 2), summary.getLines().stream().map(CrashLine::getSet).collect(Collectors.toList()));
+		assertEquals(List.of(1, 2, 3, 1), summary.getLines().stream().map(CrashLine::getIndexInSet).collect(Collectors.toList()));
+		assertEquals(2, summary.sets());
+		assertEquals(4, summary.total(Actor.SELF));
+	}
+
+	@Test
+	public void twoLinesOnOneTickBelongToDifferentPlayers()
+	{
+		KillLog log = Fights.throughToP3().partnerAt(3230, 3200).ticks(3).crashLine(3200, 3203).crashLine(3230, 3203).ticks(3).end(EndReason.YAMA_DIED);
+
+		CrashSummary summary = crashes(log, TestContext.duo(46));
+
+		assertEquals(2, summary.getLines().size());
+		assertEquals(1, summary.total(Actor.SELF));
+		assertEquals(1, summary.total(Actor.PARTNER));
+		assertEquals(List.of(1, 1), summary.getLines().stream().map(CrashLine::getIndexInSet).collect(Collectors.toList()));
+		assertEquals(new Position(3230, 3203, 0), summary.forPlayer(Actor.PARTNER).get(0).getCentre());
+	}
+
+	@Test
+	public void soloLinesAlwaysBelongToYou()
+	{
+		KillLog log = Fights.throughToP3().ticks(3).crashLine(3260, 3260).ticks(3).end(EndReason.YAMA_DIED);
+
+		CrashSummary summary = crashes(log, TestContext.withPhases(46));
+
+		assertEquals(Actor.SELF, summary.getLines().get(0).getPlayer());
+		assertTrue(summary.forPlayer(Actor.PARTNER).isEmpty());
+	}
+
+	@Test
+	public void hiddenAttacksHideTheCrashesWithTheSameReason()
+	{
+		KillLog log = Fights.throughToP3().ticks(3).crashLine(3200, 3205).ticks(3).end(EndReason.YAMA_DIED);
+		ProjectionContext context = TestContext.withPhases(46);
+		context.put(Sections.ATTACKS, Section.<AttackTimeline>hidden(HiddenReason.IDS_NOT_CAPTURED));
+
+		assertEquals(Optional.of(HiddenReason.IDS_NOT_CAPTURED), projection.project(log, context).hiddenReason());
+	}
+}
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `./gradlew test --tests 'com.yamareviewer.domain.projection.CrashesProjectionTest'`
+Expected: FAIL — `cannot find symbol: class CrashesProjection`.
+
+- [ ] **Step 3: Write `CrashesProjection`**
+
+`src/main/java/com/yamareviewer/domain/projection/CrashesProjection.java`:
+
+```java
+package com.yamareviewer.domain.projection;
+
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.GraphicObserved;
+import com.yamareviewer.domain.event.GroundGraphicObserved;
+import com.yamareviewer.domain.event.HitsplatKind;
+import com.yamareviewer.domain.event.HitsplatObserved;
+import com.yamareviewer.domain.event.Position;
+import com.yamareviewer.domain.event.TickState;
+import com.yamareviewer.domain.ids.IdRegistry;
+import com.yamareviewer.domain.ids.Role;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.review.Attack;
+import com.yamareviewer.domain.review.AttackTimeline;
+import com.yamareviewer.domain.review.CrashLine;
+import com.yamareviewer.domain.review.CrashSummary;
+import com.yamareviewer.domain.review.HiddenReason;
+import com.yamareviewer.domain.review.PhaseTimes;
+import com.yamareviewer.domain.review.Section;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeMap;
+
+/**
+ * Shadow Crash lines (spec 6.6). CRASH_FIREBALL ground graphics on one tick form lines (fireballs within
+ * LINE_SPACING tiles of each other); the centre fireball is the one closest to the others; the line belongs
+ * to the player nearest its centre. Lines within crashSetGap ticks of each other form a set. A line is hit
+ * when CRASH_IMPACT appears on its player or a non-standard damage hitsplat lands on them within
+ * crashImpactWindow ticks of the fireballs' tick.
+ */
+public final class CrashesProjection implements Projection<CrashSummary>
+{
+	static final int LINE_SPACING = 3;
+
+	@Override
+	public SectionKey<CrashSummary> key()
+	{
+		return Sections.CRASHES;
+	}
+
+	@Override
+	public Set<Role> requiredRoles()
+	{
+		return EnumSet.of(Role.CRASH_FIREBALL);
+	}
+
+	@Override
+	public Section<CrashSummary> project(KillLog log, ProjectionContext context)
+	{
+		Section<AttackTimeline> attacks = context.section(Sections.ATTACKS);
+		Optional<HiddenReason> hidden = Upstream.hidden(attacks);
+		if (hidden.isPresent())
+		{
+			return Section.hidden(hidden.get());
+		}
+		IdRegistry ids = context.ids();
+		Section<PhaseTimes> phases = context.section(Sections.PHASES);
+		int window = context.rules().getCrashImpactWindow();
+		int setGap = context.rules().getCrashSetGap();
+		Set<String> standard = standardLandings(attacks.value());
+		TreeMap<Integer, TickState> states = statesByTick(log);
+		List<GraphicObserved> graphics = log.eventsOf(GraphicObserved.class);
+		List<HitsplatObserved> hitsplats = log.eventsOf(HitsplatObserved.class);
+
+		TreeMap<Integer, List<Position>> fireballs = new TreeMap<>();
+		for (GroundGraphicObserved graphic : log.eventsOf(GroundGraphicObserved.class))
+		{
+			if (ids.is(Role.CRASH_FIREBALL, graphic.getGraphicId()) && graphic.getPosition() != null)
+			{
+				fireballs.computeIfAbsent(graphic.getTick(), tick -> new ArrayList<>()).add(graphic.getPosition());
+			}
+		}
+
+		List<CrashLine> lines = new ArrayList<>();
+		Map<String, Integer> indexInSet = new HashMap<>();
+		int set = 0;
+		Integer previousTick = null;
+		for (Map.Entry<Integer, List<Position>> entry : fireballs.entrySet())
+		{
+			int tick = entry.getKey();
+			if (previousTick == null || tick - previousTick > setGap)
+			{
+				set++;
+			}
+			previousTick = tick;
+			for (List<Position> line : cluster(entry.getValue()))
+			{
+				Position centre = centreOf(line);
+				Actor player = nearestPlayer(states, tick, centre);
+				int index = indexInSet.merge(set + "/" + player.getKind(), 1, Integer::sum);
+				boolean impact = false;
+				for (GraphicObserved graphic : graphics)
+				{
+					if (player.equals(graphic.getActor()) && ids.is(Role.CRASH_IMPACT, graphic.getGraphicId())
+						&& Math.abs(graphic.getTick() - tick) <= window)
+					{
+						impact = true;
+					}
+				}
+				int damage = 0;
+				boolean hitsplatHit = false;
+				for (HitsplatObserved hitsplat : hitsplats)
+				{
+					if (isMechanicDamage(hitsplat, player, standard) && Math.abs(hitsplat.getTick() - tick) <= window)
+					{
+						hitsplatHit = true;
+						damage += hitsplat.getAmount();
+					}
+				}
+				lines.add(new CrashLine(tick, PhaseLookup.phaseAt(phases, tick), player, set, index, centre, impact || hitsplatHit, damage));
+			}
+		}
+		return Section.ok(new CrashSummary(lines));
+	}
+
+	/** "tick/actor kind" of every standard attack's landing hitsplat, so it is never counted as a mechanic hit. */
+	static Set<String> standardLandings(AttackTimeline timeline)
+	{
+		Set<String> keys = new HashSet<>();
+		for (Attack attack : timeline.getAttacks())
+		{
+			if (attack.getLandingTick() != null && attack.getTarget() != null)
+			{
+				keys.add(attack.getLandingTick() + "/" + attack.getTarget().getKind());
+			}
+		}
+		return keys;
+	}
+
+	/** A damage hitsplat Yama's mechanics dealt to the player: not yours, not a standard attack's landing. */
+	static boolean isMechanicDamage(HitsplatObserved hitsplat, Actor player, Set<String> standardLandings)
+	{
+		return player.equals(hitsplat.getTarget()) && !hitsplat.isMine() && hitsplat.getKind() == HitsplatKind.DAMAGE
+			&& !standardLandings.contains(hitsplat.getTick() + "/" + player.getKind());
+	}
+
+	static TreeMap<Integer, TickState> statesByTick(KillLog log)
+	{
+		TreeMap<Integer, TickState> states = new TreeMap<>();
+		for (TickState state : log.eventsOf(TickState.class))
+		{
+			states.put(state.getTick(), state);
+		}
+		return states;
+	}
+
+	static int distance(Position a, Position b)
+	{
+		return Math.max(Math.abs(a.getX() - b.getX()), Math.abs(a.getY() - b.getY()));
+	}
+
+	/** The player nearest the centre, from the TickState of the tick (or the latest before it); you in solo. */
+	static Actor nearestPlayer(TreeMap<Integer, TickState> states, int tick, Position centre)
+	{
+		Map.Entry<Integer, TickState> entry = states.floorEntry(tick);
+		if (entry == null || entry.getValue().getPartnerPosition() == null || entry.getValue().getSelfPosition() == null)
+		{
+			return Actor.SELF;
+		}
+		int self = distance(centre, entry.getValue().getSelfPosition());
+		int partner = distance(centre, entry.getValue().getPartnerPosition());
+		return partner < self ? Actor.PARTNER : Actor.SELF;
+	}
+
+	private static List<List<Position>> cluster(List<Position> positions)
+	{
+		List<List<Position>> clusters = new ArrayList<>();
+		for (Position position : positions)
+		{
+			List<Position> home = null;
+			for (Iterator<List<Position>> it = clusters.iterator(); it.hasNext(); )
+			{
+				List<Position> cluster = it.next();
+				boolean near = false;
+				for (Position member : cluster)
+				{
+					if (distance(position, member) <= LINE_SPACING)
+					{
+						near = true;
+						break;
+					}
+				}
+				if (!near)
+				{
+					continue;
+				}
+				if (home == null)
+				{
+					cluster.add(position);
+					home = cluster;
+				}
+				else
+				{
+					home.addAll(cluster);
+					it.remove();
+				}
+			}
+			if (home == null)
+			{
+				List<Position> cluster = new ArrayList<>();
+				cluster.add(position);
+				clusters.add(cluster);
+			}
+		}
+		return clusters;
+	}
+
+	/** The fireball with the smallest total distance to the others; the first on a tie. */
+	private static Position centreOf(List<Position> line)
+	{
+		Position centre = line.get(0);
+		int best = Integer.MAX_VALUE;
+		for (Position candidate : line)
+		{
+			int total = 0;
+			for (Position other : line)
+			{
+				total += distance(candidate, other);
+			}
+			if (total < best)
+			{
+				best = total;
+				centre = candidate;
+			}
+		}
+		return centre;
+	}
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `./gradlew test --tests 'com.yamareviewer.domain.projection.CrashesProjectionTest'`
+Expected: PASS (8 tests).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/yamareviewer/domain/projection/CrashesProjection.java src/test/java/com/yamareviewer/domain/projection/CrashesProjectionTest.java
+git commit -m "feat: review Shadow Crash lines per player and set"
+```
+
+---
+
+### Task 12: Waves projection
+
+**Files:**
+- Create: `src/main/java/com/yamareviewer/domain/projection/WavesProjection.java`
+- Test: `src/test/java/com/yamareviewer/domain/projection/WavesProjectionTest.java`
+
+**Interfaces:**
+- Consumes: `GraphicObserved`, `GroundGraphicObserved`, `HitsplatObserved`, `GameMessageObserved`, `TickState` (Part 1), `Mode` (Part 2), `WaveHit`, `WaveSummary` (Task 2), `CrashesProjection.standardLandings`, `isMechanicDamage`, `statesByTick`, `distance` (Task 11), `Upstream`, `PhaseLookup` (Task 5).
+- Produces: `WavesProjection` (key `WAVES`, requires `SHADOW_WAVE`; `PRAYER_DISABLED_MESSAGE` is optional evidence; hides with the reason of a hidden `ATTACKS`). Constant `WAVE_MERGE_GAP = 2`: SHADOW_WAVE graphics within two ticks of each other are one wave.
+
+- [ ] **Step 1: Write the failing test**
+
+`src/test/java/com/yamareviewer/domain/projection/WavesProjectionTest.java`:
+
+```java
+package com.yamareviewer.domain.projection;
+
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.ids.Role;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.model.Phase;
+import com.yamareviewer.domain.model.Style;
+import com.yamareviewer.domain.review.AttackTimeline;
+import com.yamareviewer.domain.review.HiddenReason;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.domain.review.WaveHit;
+import com.yamareviewer.domain.review.WaveSummary;
+import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.KillLogBuilder;
+import com.yamareviewer.testing.TestContext;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import org.junit.Test;
+
+public class WavesProjectionTest
+{
+	private final WavesProjection projection = new WavesProjection();
+
+	private WaveSummary waves(KillLog log, ProjectionContext context)
+	{
+		context.put(Sections.ATTACKS, new AttacksProjection().project(log, context));
+		return projection.project(log, context).value();
+	}
+
+	@Test
+	public void keyAndRoles()
+	{
+		assertEquals(Sections.WAVES, projection.key());
+		assertEquals(Set.of(Role.SHADOW_WAVE), projection.requiredRoles());
+	}
+
+	@Test
+	public void aWaveOnYouIsHitByTheHitsplatInTheWindowAndFlagsDisabledPrayers()
+	{
+		KillLog log = Fights.throughToP3().ticks(3).waveOn(Actor.SELF).ticks(1).hitsplatOn(Actor.SELF, 15).prayersDisabledMessage().ticks(3)
+			.end(EndReason.YAMA_DIED);
+
+		WaveSummary summary = waves(log, TestContext.withPhases(47));
+
+		assertEquals(List.of(new WaveHit(43, Phase.P3, Actor.SELF, true, 15, true)), summary.getWaves());
+		assertEquals(1, summary.prayersDisabled(Actor.SELF));
+	}
+
+	@Test
+	public void aGroundWaveThatDidNotHitIsDodged()
+	{
+		KillLog log = Fights.throughToP3().ticks(3).waveAt(3200, 3203).ticks(4).end(EndReason.YAMA_DIED);
+
+		WaveSummary summary = waves(log, TestContext.withPhases(47));
+
+		assertEquals(List.of(new WaveHit(43, Phase.P3, Actor.SELF, false, 0, false)), summary.getWaves());
+		assertEquals(1, summary.dodged(Actor.SELF));
+	}
+
+	@Test
+	public void graphicsWithinTwoTicksAreOneWaveAndFurtherApartAnother()
+	{
+		KillLogBuilder kill = Fights.throughToP3().ticks(3);
+		kill.waveAt(3190, 3203).ticks(1).waveAt(3195, 3203).ticks(1).waveAt(3200, 3203).ticks(5);
+		kill.waveAt(3200, 3203).ticks(2);
+		KillLog log = kill.end(EndReason.YAMA_DIED);
+
+		WaveSummary summary = waves(log, TestContext.withPhases(52));
+
+		assertEquals(2, summary.total(Actor.SELF));
+		assertEquals(45, summary.getWaves().get(0).getTick());
+		assertEquals(50, summary.getWaves().get(1).getTick());
+	}
+
+	@Test
+	public void inDuoEachPlayerGetsTheirOwnResult()
+	{
+		KillLog log = Fights.throughToP3().partnerAt(3210, 3200).ticks(3).waveOn(Actor.SELF).ticks(1).waveOn(Actor.PARTNER).ticks(1)
+			.hitsplatOn(Actor.PARTNER, 10).ticks(3).end(EndReason.YAMA_DIED);
+
+		WaveSummary summary = waves(log, TestContext.duo(48));
+
+		assertEquals(List.of(new WaveHit(43, Phase.P3, Actor.SELF, false, 0, false), new WaveHit(44, Phase.P3, Actor.PARTNER, true, 10, false)),
+			summary.getWaves());
+	}
+
+	@Test
+	public void aStandardAttacksLandingIsNotAWaveHit()
+	{
+		KillLog log = Fights.throughToP3().yamaCasts(Style.MAGIC).ticks(2).impactOn(Actor.SELF, Style.MAGIC).hitsplatOn(Actor.SELF, 3)
+			.waveOn(Actor.SELF).ticks(5).end(EndReason.YAMA_DIED);
+
+		assertFalse(waves(log, TestContext.withPhases(47)).getWaves().get(0).isHit());
+	}
+
+	@Test
+	public void hiddenAttacksHideTheWavesWithTheSameReason()
+	{
+		KillLog log = Fights.throughToP3().ticks(3).waveOn(Actor.SELF).ticks(3).end(EndReason.YAMA_DIED);
+		ProjectionContext context = TestContext.withPhases(46);
+		context.put(Sections.ATTACKS, Section.<AttackTimeline>hidden(HiddenReason.ERROR));
+
+		assertEquals(Optional.of(HiddenReason.ERROR), projection.project(log, context).hiddenReason());
+		assertTrue(projection.project(log, TestContext.empty()).hiddenReason().isPresent());
+	}
+}
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `./gradlew test --tests 'com.yamareviewer.domain.projection.WavesProjectionTest'`
+Expected: FAIL — `cannot find symbol: class WavesProjection`.
+
+- [ ] **Step 3: Write `WavesProjection`**
+
+`src/main/java/com/yamareviewer/domain/projection/WavesProjection.java`:
+
+```java
+package com.yamareviewer.domain.projection;
+
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.GameMessageObserved;
+import com.yamareviewer.domain.event.GraphicObserved;
+import com.yamareviewer.domain.event.GroundGraphicObserved;
+import com.yamareviewer.domain.event.HitsplatObserved;
+import com.yamareviewer.domain.event.Position;
+import com.yamareviewer.domain.event.TickState;
+import com.yamareviewer.domain.ids.IdRegistry;
+import com.yamareviewer.domain.ids.Role;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.review.AttackTimeline;
+import com.yamareviewer.domain.review.HiddenReason;
+import com.yamareviewer.domain.review.PhaseTimes;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.domain.review.WaveHit;
+import com.yamareviewer.domain.review.WaveSummary;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeMap;
+
+/**
+ * Shadow Waves (spec 6.7). Every SHADOW_WAVE graphic, on the ground or on a player, belongs to a wave;
+ * graphics within WAVE_MERGE_GAP ticks of each other are the same wave. A wave reaches a player at the tick
+ * of the wave graphic on them, else at the tick of the ground graphic nearest to them, else at its first tick.
+ * The player is hit when a non-standard damage hitsplat lands within crashImpactWindow ticks of that tick.
+ */
+public final class WavesProjection implements Projection<WaveSummary>
+{
+	static final int WAVE_MERGE_GAP = 2;
+
+	@Override
+	public SectionKey<WaveSummary> key()
+	{
+		return Sections.WAVES;
+	}
+
+	@Override
+	public Set<Role> requiredRoles()
+	{
+		return EnumSet.of(Role.SHADOW_WAVE);
+	}
+
+	@Override
+	public Section<WaveSummary> project(KillLog log, ProjectionContext context)
+	{
+		Section<AttackTimeline> attacks = context.section(Sections.ATTACKS);
+		Optional<HiddenReason> hidden = Upstream.hidden(attacks);
+		if (hidden.isPresent())
+		{
+			return Section.hidden(hidden.get());
+		}
+		IdRegistry ids = context.ids();
+		Section<PhaseTimes> phases = context.section(Sections.PHASES);
+		int window = context.rules().getCrashImpactWindow();
+		Set<String> standard = CrashesProjection.standardLandings(attacks.value());
+		TreeMap<Integer, TickState> states = CrashesProjection.statesByTick(log);
+		List<HitsplatObserved> hitsplats = log.eventsOf(HitsplatObserved.class);
+		List<Integer> disabledTicks = new ArrayList<>();
+		for (GameMessageObserved message : log.eventsOf(GameMessageObserved.class))
+		{
+			if (ids.matchesText(Role.PRAYER_DISABLED_MESSAGE, message.getText()))
+			{
+				disabledTicks.add(message.getTick());
+			}
+		}
+		List<Actor> players = new ArrayList<>();
+		players.add(Actor.SELF);
+		if (context.value(Sections.MODE).map(mode -> mode != Mode.SOLO).orElse(false))
+		{
+			players.add(Actor.PARTNER);
+		}
+
+		List<WaveHit> hits = new ArrayList<>();
+		for (List<WaveGraphic> wave : waves(log, ids))
+		{
+			for (Actor player : players)
+			{
+				int reach = reachTick(wave, player, states);
+				boolean hit = false;
+				int damage = 0;
+				for (HitsplatObserved hitsplat : hitsplats)
+				{
+					if (CrashesProjection.isMechanicDamage(hitsplat, player, standard) && Math.abs(hitsplat.getTick() - reach) <= window)
+					{
+						hit = true;
+						damage += hitsplat.getAmount();
+					}
+				}
+				boolean disabled = false;
+				if (Actor.SELF.equals(player))
+				{
+					for (int tick : disabledTicks)
+					{
+						if (Math.abs(tick - reach) <= window)
+						{
+							disabled = true;
+						}
+					}
+				}
+				hits.add(new WaveHit(reach, PhaseLookup.phaseAt(phases, reach), player, hit, damage, disabled));
+			}
+		}
+		return Section.ok(new WaveSummary(hits));
+	}
+
+	private static List<List<WaveGraphic>> waves(KillLog log, IdRegistry ids)
+	{
+		TreeMap<Integer, List<WaveGraphic>> byTick = new TreeMap<>();
+		for (GroundGraphicObserved graphic : log.eventsOf(GroundGraphicObserved.class))
+		{
+			if (ids.is(Role.SHADOW_WAVE, graphic.getGraphicId()))
+			{
+				byTick.computeIfAbsent(graphic.getTick(), tick -> new ArrayList<>()).add(new WaveGraphic(graphic.getTick(), null, graphic.getPosition()));
+			}
+		}
+		for (GraphicObserved graphic : log.eventsOf(GraphicObserved.class))
+		{
+			if (graphic.getActor().isPlayer() && ids.is(Role.SHADOW_WAVE, graphic.getGraphicId()))
+			{
+				byTick.computeIfAbsent(graphic.getTick(), tick -> new ArrayList<>()).add(new WaveGraphic(graphic.getTick(), graphic.getActor(), null));
+			}
+		}
+		List<List<WaveGraphic>> waves = new ArrayList<>();
+		Integer last = null;
+		for (Map.Entry<Integer, List<WaveGraphic>> entry : byTick.entrySet())
+		{
+			if (last == null || entry.getKey() - last > WAVE_MERGE_GAP)
+			{
+				waves.add(new ArrayList<>());
+			}
+			waves.get(waves.size() - 1).addAll(entry.getValue());
+			last = entry.getKey();
+		}
+		return waves;
+	}
+
+	private static int reachTick(List<WaveGraphic> wave, Actor player, TreeMap<Integer, TickState> states)
+	{
+		for (WaveGraphic graphic : wave)
+		{
+			if (player.equals(graphic.actor))
+			{
+				return graphic.tick;
+			}
+		}
+		Integer nearestTick = null;
+		int nearest = Integer.MAX_VALUE;
+		for (WaveGraphic graphic : wave)
+		{
+			Position at = playerPosition(states, graphic.tick, player);
+			if (graphic.position == null || at == null)
+			{
+				continue;
+			}
+			int distance = CrashesProjection.distance(graphic.position, at);
+			if (distance < nearest)
+			{
+				nearest = distance;
+				nearestTick = graphic.tick;
+			}
+		}
+		return nearestTick != null ? nearestTick : wave.get(0).tick;
+	}
+
+	private static Position playerPosition(TreeMap<Integer, TickState> states, int tick, Actor player)
+	{
+		Map.Entry<Integer, TickState> entry = states.floorEntry(tick);
+		if (entry == null)
+		{
+			return null;
+		}
+		return Actor.SELF.equals(player) ? entry.getValue().getSelfPosition() : entry.getValue().getPartnerPosition();
+	}
+
+	private static final class WaveGraphic
+	{
+		private final int tick;
+		private final Actor actor;
+		private final Position position;
+
+		private WaveGraphic(int tick, Actor actor, Position position)
+		{
+			this.tick = tick;
+			this.actor = actor;
+			this.position = position;
+		}
+	}
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `./gradlew test --tests 'com.yamareviewer.domain.projection.WavesProjectionTest'`
+Expected: PASS (7 tests). In `graphicsWithinTwoTicksAreOneWave…` the first wave reaches you at tick 45 because that ground graphic (3200, 3203) is the nearest to your tile.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/yamareviewer/domain/projection/WavesProjection.java src/test/java/com/yamareviewer/domain/projection/WavesProjectionTest.java
+git commit -m "feat: review Shadow Waves per player"
+```
+
+---
+
+### Task 13: Specs projection
+
+**Files:**
+- Create: `src/main/java/com/yamareviewer/domain/projection/SpecsProjection.java`
+- Test: `src/test/java/com/yamareviewer/domain/projection/SpecsProjectionTest.java`
+
+**Interfaces:**
+- Consumes: `SpecWeapon`, `DrainModel`, `YamaStats` (Task 1), `SpecResult`, `SpecOutcome`, `HornUse`, `DrainStep`, `SpecSummary` (Task 2), `Rules.getSpecResultWindow()`, `getStatRestoreTicks()`, `ContractRules.isSpecsAlwaysHit()`, `TickState`, `AnimationObserved`, `HitsplatObserved`, `ActorKind` (Part 1), `CrashesProjection.statesByTick` (Task 11), `PhaseLookup` (Task 5).
+- Produces: `SpecsProjection` (key `SPECS`, no required roles because `SPEC_PURGING_STAFF` stays uncaptured until the logging kills; each weapon degrades on its own). Constants `HORN_WINDOW = 10`, `STAT_RESTORE = "Stat restore"`.
+
+- [ ] **Step 1: Write the failing test**
+
+`src/test/java/com/yamareviewer/domain/projection/SpecsProjectionTest.java`:
+
+```java
+package com.yamareviewer.domain.projection;
+
+import com.yamareviewer.domain.drain.SpecWeapon;
+import com.yamareviewer.domain.drain.YamaStats;
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.ids.Role;
+import com.yamareviewer.domain.model.Contract;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.model.Phase;
+import com.yamareviewer.domain.review.DrainStep;
+import com.yamareviewer.domain.review.SpecOutcome;
+import com.yamareviewer.domain.review.SpecResult;
+import com.yamareviewer.domain.review.SpecSummary;
+import com.yamareviewer.testing.KillLogBuilder;
+import com.yamareviewer.testing.TestContext;
+import com.yamareviewer.testing.TestIds;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import org.junit.Test;
+
+public class SpecsProjectionTest
+{
+	private static final int MAUL = TestIds.id(Role.WEAPON_ELDER_MAUL);
+
+	private final SpecsProjection projection = new SpecsProjection();
+
+	private SpecSummary specs(KillLog log, ProjectionContext context)
+	{
+		return projection.project(log, context).value();
+	}
+
+	private static KillLogBuilder maulSpecAtTickTwo()
+	{
+		return KillLogBuilder.kill().weapon(MAUL).ticks(2).specAnimation(Actor.SELF, Role.SPEC_ELDER_MAUL).spec(50).endTick();
+	}
+
+	@Test
+	public void keyAndRoles()
+	{
+		assertEquals(Sections.SPECS, projection.key());
+		assertEquals(Set.of(), projection.requiredRoles());
+	}
+
+	@Test
+	public void ownSpecWithAnimationAndLandedHitDrainsDefence()
+	{
+		KillLog log = maulSpecAtTickTwo().myHitOn(Actor.YAMA, 60).ticks(4).end(EndReason.YAMA_DIED);
+
+		SpecSummary summary = specs(log, TestContext.withPhases(7));
+
+		assertEquals(List.of(new SpecResult(2, Phase.P1, Actor.SELF, SpecWeapon.ELDER_MAUL, true, Actor.YAMA, SpecOutcome.LANDED, 60, 50, null, null)),
+			summary.getSpecs());
+		assertEquals(List.of(new DrainStep(2, Phase.P1, "Elder maul", new YamaStats(225, 250, 0), new YamaStats(147, 250, 0))), summary.getDrains());
+		assertEquals(147, summary.getLowestDefence());
+		assertEquals(Phase.P1, summary.getLowestDefencePhase());
+		assertEquals(78, summary.defenceDrained());
+		assertEquals(new YamaStats(147, 250, 0), summary.getFinalStats());
+		assertEquals(Optional.of(1.0), summary.landedShare());
+	}
+
+	@Test
+	public void animationOnTheTickBeforeTheDropStillMatches()
+	{
+		KillLog log = KillLogBuilder.kill().weapon(MAUL).ticks(2).specAnimation(Actor.SELF, Role.SPEC_ELDER_MAUL).endTick()
+			.spec(50).myHitOn(Actor.YAMA, 60).ticks(4).end(EndReason.YAMA_DIED);
+
+		SpecResult spec = specs(log, TestContext.withPhases(7)).getSpecs().get(0);
+
+		assertEquals(2, spec.getTick());
+		assertEquals(50, spec.getEnergyUsed());
+		assertTrue(spec.isAnimationSeen());
+		assertEquals(SpecOutcome.LANDED, spec.getOutcome());
+	}
+
+	@Test
+	public void otherWeaponDropIsRecordedWithoutDrain()
+	{
+		KillLog log = KillLogBuilder.kill().weapon(4151).ticks(2).spec(50).endTick().myHitOn(Actor.YAMA, 30).ticks(4).end(EndReason.YAMA_DIED);
+
+		SpecSummary summary = specs(log, TestContext.withPhases(7));
+
+		assertEquals(List.of(new SpecResult(2, Phase.P1, Actor.SELF, null, false, Actor.YAMA, SpecOutcome.LANDED, 30, 50, null, null)), summary.getSpecs());
+		assertTrue(summary.getDrains().isEmpty());
+		assertEquals(1, summary.otherWeaponSpecs());
+		assertEquals(0, summary.defenceDrained());
+	}
+
+	@Test
+	public void knownWeaponWithoutAnimationIsRecordedUnmatched()
+	{
+		KillLog log = KillLogBuilder.kill().weapon(MAUL).ticks(2).spec(50).endTick().myHitOn(Actor.YAMA, 60).ticks(4).end(EndReason.YAMA_DIED);
+
+		SpecSummary summary = specs(log, TestContext.withPhases(7));
+
+		SpecResult spec = summary.getSpecs().get(0);
+		assertEquals(SpecWeapon.ELDER_MAUL, spec.getWeapon());
+		assertFalse(spec.isAnimationSeen());
+		assertEquals(147, summary.getLowestDefence());
+	}
+
+	@Test
+	public void missedAndUnknownResultsDoNotDrain()
+	{
+		KillLogBuilder kill = maulSpecAtTickTwo().myHitOn(Actor.YAMA, 0).ticks(5);
+		kill.specAnimation(Actor.SELF, Role.SPEC_ELDER_MAUL).spec(0).endTick().ticks(8);
+		KillLog log = kill.end(EndReason.YAMA_DIED);
+
+		SpecSummary summary = specs(log, TestContext.withPhases(17));
+
+		assertEquals(List.of(SpecOutcome.MISSED, SpecOutcome.UNKNOWN), summary.getSpecs().stream().map(SpecResult::getOutcome).collect(Collectors.toList()));
+		assertEquals(Integer.valueOf(0), summary.getSpecs().get(0).getDamage());
+		assertNull(summary.getSpecs().get(1).getDamage());
+		assertTrue(summary.getDrains().isEmpty());
+		assertEquals(Optional.of(0.0), summary.landedShare());
+		assertEquals(2, summary.used(SpecWeapon.ELDER_MAUL));
+		assertEquals(0, summary.landed(SpecWeapon.ELDER_MAUL));
+	}
+
+	@Test
+	public void purgingStaffIsDetectedByItsAnimationAloneAndTargetsTheFlare()
+	{
+		KillLog log = KillLogBuilder.kill().ticks(2).specAnimation(Actor.SELF, Role.SPEC_PURGING_STAFF).endTick()
+			.myHitOn(Actor.flare(7), 40).ticks(3).end(EndReason.YAMA_DIED);
+
+		SpecSummary summary = specs(log, TestContext.withPhases(6));
+
+		assertEquals(List.of(new SpecResult(2, Phase.P1, Actor.SELF, SpecWeapon.PURGING_STAFF, true, Actor.flare(7), SpecOutcome.LANDED, 40, 0, null, null)),
+			summary.getSpecs());
+		assertTrue(summary.getDrains().isEmpty());
+	}
+
+	@Test
+	public void partnerSpecsAreDetectedByAnimationAndResolvedByTheirHitsplat()
+	{
+		KillLog log = KillLogBuilder.kill().ticks(2).animates(Actor.PARTNER, TestIds.id(Role.SPEC_DRAGON_WARHAMMER)).endTick()
+			.hitsplatOn(Actor.YAMA, 50).ticks(3).end(EndReason.YAMA_DIED);
+
+		SpecSummary summary = specs(log, TestContext.duo(6));
+
+		assertEquals(List.of(new SpecResult(2, Phase.P1, Actor.PARTNER, SpecWeapon.DRAGON_WARHAMMER, true, Actor.YAMA, SpecOutcome.LANDED, 50, 0, null, null)),
+			summary.getSpecs());
+		assertEquals(158, summary.getLowestDefence());
+		assertTrue(summary.ownSpecs().isEmpty());
+		assertEquals(Optional.empty(), summary.landedShare());
+	}
+
+	@Test
+	public void specsAlwaysLandUnderFamiliarAcquisition()
+	{
+		KillLog log = maulSpecAtTickTwo().myHitOn(Actor.YAMA, 0).ticks(4).end(EndReason.YAMA_DIED);
+
+		SpecSummary summary = specs(log, TestContext.under(Contract.FAMILIAR_ACQUISITION, 7));
+
+		assertEquals(SpecOutcome.LANDED, summary.getSpecs().get(0).getOutcome());
+		assertEquals(new YamaStats(247, 275, 0), summary.getBase());
+		assertEquals(161, summary.getLowestDefence());
+	}
+
+	@Test
+	public void hornAssistsTheNextMeleeSpecWithinTenTicksOrIsUnused()
+	{
+		KillLogBuilder kill = KillLogBuilder.kill().weapon(TestIds.id(Role.WEAPON_SOULFLAME_HORN)).ticks(2);
+		kill.specAnimation(Actor.SELF, Role.SPEC_SOULFLAME_HORN).spec(75).endTick();
+		kill.weapon(MAUL).ticks(5);
+		kill.specAnimation(Actor.SELF, Role.SPEC_ELDER_MAUL).spec(25).endTick();
+		kill.myHitOn(Actor.YAMA, 60).ticks(6);
+		kill.weapon(TestIds.id(Role.WEAPON_SOULFLAME_HORN)).spec(100).ticks(5);
+		kill.specAnimation(Actor.SELF, Role.SPEC_SOULFLAME_HORN).spec(75).endTick();
+		kill.ticks(3);
+		KillLog log = kill.end(EndReason.YAMA_DIED);
+
+		SpecSummary summary = specs(log, TestContext.withPhases(24));
+
+		assertEquals(2, summary.getHorns().size());
+		assertEquals(8, summary.getHorns().get(0).getAssistedSpec().getTick());
+		assertEquals(SpecOutcome.LANDED, summary.getHorns().get(0).getAssistedSpec().getOutcome());
+		assertTrue(summary.getHorns().get(1).isUnused());
+		assertEquals(20, summary.getHorns().get(1).getTick());
+		assertEquals(SpecOutcome.UNKNOWN, summary.getSpecs().get(0).getOutcome());
+		assertEquals(25, summary.getSpecs().get(0).getEnergyUsed());
+		assertEquals(50, summary.ownEnergyUsedOnDrains());
+	}
+
+	@Test
+	public void saradominGodswordRestoresHpAndPrayerFromTheTickStates()
+	{
+		KillLog log = KillLogBuilder.kill().weapon(TestIds.id(Role.WEAPON_SARADOMIN_GODSWORD)).hp(50).prayerPoints(30).ticks(2)
+			.specAnimation(Actor.SELF, Role.SPEC_SARADOMIN_GODSWORD).spec(50).endTick()
+			.hp(70).prayerPoints(40).myHitOn(Actor.YAMA, 40).ticks(3).end(EndReason.YAMA_DIED);
+
+		SpecResult spec = specs(log, TestContext.withPhases(6)).getSpecs().get(0);
+
+		assertEquals(Integer.valueOf(20), spec.getHpRestored());
+		assertEquals(Integer.valueOf(10), spec.getPrayerRestored());
+		assertEquals(SpecOutcome.LANDED, spec.getOutcome());
+	}
+
+	@Test
+	public void statRestoreStepsAreRecordedAndTheFinalStatsIncludeThem()
+	{
+		KillLogBuilder kill = maulSpecAtTickTwo().myHitOn(Actor.YAMA, 60).spec(100).ticks(147);
+		kill.specAnimation(Actor.SELF, Role.SPEC_ELDER_MAUL).spec(50).endTick();
+		kill.myHitOn(Actor.YAMA, 60).ticks(59);
+		KillLog log = kill.end(EndReason.YAMA_DIED);
+
+		SpecSummary summary = specs(log, TestContext.withPhases(210));
+
+		assertEquals(List.of("Elder maul", "Stat restore", "Elder maul", "Stat restore"),
+			summary.getDrains().stream().map(DrainStep::getCause).collect(Collectors.toList()));
+		assertEquals(List.of(147, 148, 145, 146), summary.getDrains().stream().map(step -> step.getAfter().getDefence()).collect(Collectors.toList()));
+		assertEquals(List.of(2, 150, 150, 210), summary.getDrains().stream().map(DrainStep::getTick).collect(Collectors.toList()));
+		assertEquals(146, summary.getFinalStats().getDefence());
+		assertEquals(145, summary.getLowestDefence());
+		assertEquals(Phase.P3, summary.getLowestDefencePhase());
+	}
+
+	@Test
+	public void hiddenPhasesLeaveThePhaseNullButStillReview()
+	{
+		KillLog log = maulSpecAtTickTwo().myHitOn(Actor.YAMA, 60).ticks(4).end(EndReason.YAMA_DIED);
+
+		SpecSummary summary = specs(log, TestContext.empty());
+
+		assertNull(summary.getSpecs().get(0).getPhase());
+		assertEquals(147, summary.getLowestDefence());
+		assertNull(summary.getLowestDefencePhase());
+	}
+}
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `./gradlew test --tests 'com.yamareviewer.domain.projection.SpecsProjectionTest'`
+Expected: FAIL — `cannot find symbol: class SpecsProjection`.
+
+- [ ] **Step 3: Write `SpecsProjection`**
+
+`src/main/java/com/yamareviewer/domain/projection/SpecsProjection.java`:
+
+```java
+package com.yamareviewer.domain.projection;
+
+import com.yamareviewer.domain.contract.ContractRules;
+import com.yamareviewer.domain.drain.DrainModel;
+import com.yamareviewer.domain.drain.SpecWeapon;
+import com.yamareviewer.domain.drain.YamaStats;
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.ActorKind;
+import com.yamareviewer.domain.event.AnimationObserved;
+import com.yamareviewer.domain.event.HitsplatKind;
+import com.yamareviewer.domain.event.HitsplatObserved;
+import com.yamareviewer.domain.event.TickState;
+import com.yamareviewer.domain.ids.IdRegistry;
+import com.yamareviewer.domain.ids.Role;
+import com.yamareviewer.domain.ids.Rules;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.model.Phase;
+import com.yamareviewer.domain.review.DrainStep;
+import com.yamareviewer.domain.review.HornUse;
+import com.yamareviewer.domain.review.PhaseTimes;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.domain.review.SpecOutcome;
+import com.yamareviewer.domain.review.SpecResult;
+import com.yamareviewer.domain.review.SpecSummary;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeMap;
+
+/**
+ * Special attacks and the drain model (spec 6.9). Your specs are spec-energy drops in the TickStates matched
+ * with a SPEC_* animation on the same or the previous tick (a drop with a known weapon but no animation is
+ * kept, unmatched, for the SpecsMatched check; a drop with any other weapon is an OTHER_WEAPON spec). The
+ * purging staff is detected by its animation alone. Partner specs are their SPEC_* animations. The result
+ * is the first hitsplat on the target within specResultWindow ticks. Landed specs drain in tick order.
+ */
+public final class SpecsProjection implements Projection<SpecSummary>
+{
+	static final int HORN_WINDOW = 10;
+	static final String STAT_RESTORE = "Stat restore";
+
+	@Override
+	public SectionKey<SpecSummary> key()
+	{
+		return Sections.SPECS;
+	}
+
+	@Override
+	public Set<Role> requiredRoles()
+	{
+		return Set.of();
+	}
+
+	@Override
+	public Section<SpecSummary> project(KillLog log, ProjectionContext context)
+	{
+		IdRegistry ids = context.ids();
+		Rules rules = context.rules();
+		ContractRules contract = context.contractRules();
+		Section<PhaseTimes> phases = context.section(Sections.PHASES);
+		TreeMap<Integer, TickState> states = CrashesProjection.statesByTick(log);
+		List<AnimationObserved> animations = log.eventsOf(AnimationObserved.class);
+		List<HitsplatObserved> hitsplats = log.eventsOf(HitsplatObserved.class);
+		List<Detected> detected = detect(ids, states, animations);
+
+		DrainModel model = DrainModel.forFight(contract, rules);
+		List<SpecResult> specs = new ArrayList<>();
+		List<DrainStep> drains = new ArrayList<>();
+		int lowest = model.base().getDefence();
+		Phase lowestPhase = null;
+		for (Detected spec : detected)
+		{
+			Phase phase = PhaseLookup.phaseAt(phases, spec.tick);
+			SpecResult result = resolve(spec, phase, hitsplats, states, rules.getSpecResultWindow(), contract.isSpecsAlwaysHit());
+			specs.add(result);
+			if (result.getOutcome() == SpecOutcome.LANDED && spec.weapon != null && spec.weapon.drains())
+			{
+				YamaStats before = model.stats();
+				YamaStats restored = model.advanceTo(spec.tick);
+				if (!restored.equals(before))
+				{
+					drains.add(new DrainStep(spec.tick, phase, STAT_RESTORE, before, restored));
+				}
+				YamaStats after = model.apply(spec.tick, spec.weapon.drainRule(), result.getDamage());
+				drains.add(new DrainStep(spec.tick, phase, spec.weapon.displayName(), restored, after));
+				if (after.getDefence() < lowest)
+				{
+					lowest = after.getDefence();
+					lowestPhase = phase;
+				}
+			}
+		}
+		YamaStats beforeEnd = model.stats();
+		YamaStats end = model.advanceTo(log.lastTick());
+		if (!end.equals(beforeEnd))
+		{
+			drains.add(new DrainStep(log.lastTick(), PhaseLookup.phaseAt(phases, log.lastTick()), STAT_RESTORE, beforeEnd, end));
+		}
+		return Section.ok(new SpecSummary(specs, horns(specs), drains, model.base(), end, lowest, lowestPhase));
+	}
+
+	private static List<Detected> detect(IdRegistry ids, TreeMap<Integer, TickState> states, List<AnimationObserved> animations)
+	{
+		List<Detected> detected = new ArrayList<>();
+		Set<Integer> consumedDrops = new HashSet<>();
+		for (AnimationObserved animation : animations)
+		{
+			if (Actor.SELF.equals(animation.getActor()) && ids.is(Role.SPEC_PURGING_STAFF, animation.getAnimationId()))
+			{
+				int energy = 0;
+				for (int tick = animation.getTick(); tick <= animation.getTick() + 1; tick++)
+				{
+					int drop = dropAt(states, tick);
+					if (drop > 0 && consumedDrops.add(tick))
+					{
+						energy = drop;
+						break;
+					}
+				}
+				detected.add(new Detected(animation.getTick(), Actor.SELF, SpecWeapon.PURGING_STAFF, true, energy));
+			}
+		}
+		TickState previous = null;
+		for (TickState state : states.values())
+		{
+			if (previous != null && state.getSpecEnergy() < previous.getSpecEnergy() && !consumedDrops.contains(state.getTick()))
+			{
+				int drop = previous.getSpecEnergy() - state.getSpecEnergy();
+				AnimationObserved animation = ownSpecAnimation(ids, animations, state.getTick());
+				if (animation != null)
+				{
+					SpecWeapon weapon = SpecWeapon.ofAnimation(ids, animation.getAnimationId()).orElse(null);
+					detected.add(new Detected(animation.getTick(), Actor.SELF, weapon, true, drop));
+				}
+				else
+				{
+					SpecWeapon equipped = SpecWeapon.ofWeapon(ids, state.getWeaponId())
+						.orElse(SpecWeapon.ofWeapon(ids, previous.getWeaponId()).orElse(null));
+					detected.add(new Detected(state.getTick(), Actor.SELF, equipped, false, drop));
+				}
+			}
+			previous = state;
+		}
+		for (AnimationObserved animation : animations)
+		{
+			if (Actor.PARTNER.equals(animation.getActor()))
+			{
+				Optional<SpecWeapon> weapon = SpecWeapon.ofAnimation(ids, animation.getAnimationId());
+				if (weapon.isPresent())
+				{
+					detected.add(new Detected(animation.getTick(), Actor.PARTNER, weapon.get(), true, 0));
+				}
+			}
+		}
+		detected.sort(Comparator.comparingInt(spec -> spec.tick));
+		return detected;
+	}
+
+	/** Your spec energy lost between the previous TickState and the one of this tick; 0 when it did not drop. */
+	private static int dropAt(TreeMap<Integer, TickState> states, int tick)
+	{
+		TickState now = states.get(tick);
+		Map.Entry<Integer, TickState> before = states.lowerEntry(tick);
+		if (now == null || before == null)
+		{
+			return 0;
+		}
+		return Math.max(0, before.getValue().getSpecEnergy() - now.getSpecEnergy());
+	}
+
+	/** Your latest SPEC_* animation (purging staff excluded) on the drop tick or the tick before. */
+	private static AnimationObserved ownSpecAnimation(IdRegistry ids, List<AnimationObserved> animations, int dropTick)
+	{
+		AnimationObserved found = null;
+		for (AnimationObserved animation : animations)
+		{
+			if (!Actor.SELF.equals(animation.getActor()) || animation.getTick() < dropTick - 1 || animation.getTick() > dropTick)
+			{
+				continue;
+			}
+			Optional<SpecWeapon> weapon = SpecWeapon.ofAnimation(ids, animation.getAnimationId());
+			if (!weapon.isPresent() || weapon.get() == SpecWeapon.PURGING_STAFF)
+			{
+				continue;
+			}
+			if (found == null || animation.getTick() > found.getTick())
+			{
+				found = animation;
+			}
+		}
+		return found;
+	}
+
+	private static SpecResult resolve(Detected spec, Phase phase, List<HitsplatObserved> hitsplats, TreeMap<Integer, TickState> states,
+		int window, boolean alwaysHit)
+	{
+		if (spec.weapon == SpecWeapon.SOULFLAME_HORN)
+		{
+			return new SpecResult(spec.tick, phase, spec.user, spec.weapon, spec.animationSeen, null, SpecOutcome.UNKNOWN, null, spec.energy, null, null);
+		}
+		boolean purging = spec.weapon == SpecWeapon.PURGING_STAFF;
+		boolean mine = Actor.SELF.equals(spec.user);
+		HitsplatObserved hit = null;
+		for (HitsplatObserved hitsplat : hitsplats)
+		{
+			if (hitsplat.getTick() < spec.tick || hitsplat.getTick() > spec.tick + window || hitsplat.isMine() != mine
+				|| (hitsplat.getKind() != HitsplatKind.DAMAGE && hitsplat.getKind() != HitsplatKind.BLOCK))
+			{
+				continue;
+			}
+			boolean rightTarget = purging ? hitsplat.getTarget().getKind() == ActorKind.FLARE : Actor.YAMA.equals(hitsplat.getTarget());
+			if (rightTarget)
+			{
+				hit = hitsplat;
+				break;
+			}
+		}
+		if (hit == null)
+		{
+			return new SpecResult(spec.tick, phase, spec.user, spec.weapon, spec.animationSeen, purging ? null : Actor.YAMA,
+				SpecOutcome.UNKNOWN, null, spec.energy, null, null);
+		}
+		SpecOutcome outcome = hit.getAmount() > 0 || alwaysHit ? SpecOutcome.LANDED : SpecOutcome.MISSED;
+		Integer hpRestored = null;
+		Integer prayerRestored = null;
+		if (spec.weapon == SpecWeapon.SARADOMIN_GODSWORD && outcome == SpecOutcome.LANDED)
+		{
+			TickState after = states.get(hit.getTick());
+			Map.Entry<Integer, TickState> before = states.lowerEntry(hit.getTick());
+			if (after != null && before != null)
+			{
+				hpRestored = Math.max(0, after.getHitpoints() - before.getValue().getHitpoints());
+				prayerRestored = Math.max(0, after.getPrayerPoints() - before.getValue().getPrayerPoints());
+			}
+		}
+		return new SpecResult(spec.tick, phase, spec.user, spec.weapon, spec.animationSeen, hit.getTarget(), outcome, hit.getAmount(),
+			spec.energy, hpRestored, prayerRestored);
+	}
+
+	/** Each horn blown, with the first melee spec by anyone within HORN_WINDOW ticks after it. */
+	private static List<HornUse> horns(List<SpecResult> specs)
+	{
+		List<HornUse> horns = new ArrayList<>();
+		for (SpecResult horn : specs)
+		{
+			if (horn.getWeapon() != SpecWeapon.SOULFLAME_HORN)
+			{
+				continue;
+			}
+			SpecResult assisted = null;
+			for (SpecResult spec : specs)
+			{
+				if (spec.getWeapon() != null && spec.getWeapon().isMelee()
+					&& spec.getTick() > horn.getTick() && spec.getTick() <= horn.getTick() + HORN_WINDOW)
+				{
+					assisted = spec;
+					break;
+				}
+			}
+			horns.add(new HornUse(horn.getTick(), horn.getUser(), assisted));
+		}
+		return horns;
+	}
+
+	private static final class Detected
+	{
+		private final int tick;
+		private final Actor user;
+		private final SpecWeapon weapon;
+		private final boolean animationSeen;
+		private final int energy;
+
+		private Detected(int tick, Actor user, SpecWeapon weapon, boolean animationSeen, int energy)
+		{
+			this.tick = tick;
+			this.user = user;
+			this.weapon = weapon;
+			this.animationSeen = animationSeen;
+			this.energy = energy;
+		}
+	}
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `./gradlew test --tests 'com.yamareviewer.domain.projection.SpecsProjectionTest'`
+Expected: PASS (13 tests). In `statRestoreStepsAreRecorded…` the restore at tick 150 (147 → 148) is applied before the second maul spec (148 → 96, floored to 145), and the final advance to tick 210 adds the step due at tick 200 (145 → 146).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/yamareviewer/domain/projection/SpecsProjection.java src/test/java/com/yamareviewer/domain/projection/SpecsProjectionTest.java
+git commit -m "feat: detect special attacks and model Yama's drains"
+```
+
+---
+
+### Task 14: Projection order and damage attribution rules 1, 3 and 4
+
+**Files:**
+- Create: `src/main/java/com/yamareviewer/domain/projection/P3DamageSources.java`
+- Modify: `src/main/java/com/yamareviewer/domain/projection/DamageAttributionProjection.java`, `src/main/java/com/yamareviewer/domain/projection/Projections.java`
+- Test: `src/test/java/com/yamareviewer/domain/projection/ProjectionsP3Test.java`, `src/test/java/com/yamareviewer/domain/projection/DamageAttributionP3Test.java`
+
+**Interfaces:**
+- Consumes: `ReviewBuilder`, `Projections.standard()`, `DamageSummary.bySource`, `DamageSource` (Part 2), every projection of Tasks 5–13, `CrashesProjection.standardLandings` (Task 11).
+- Produces: `P3DamageSources(ProjectionContext)` with `Optional<DamageSource> standard(HitsplatObserved)` (rule 1) and `Optional<DamageSource> crashOrWave(HitsplatObserved)` (rules 3 and 4); `Projections.standard()` in the final order Phases, Contract, Mode, Glyphs, Attacks, Crashes, Waves, Flares, Specs, PrayerReview, Opener, TickLog, DamageAttribution, Supplies, DeathRecap.
+
+- [ ] **Step 1: Write the failing tests**
+
+`src/test/java/com/yamareviewer/domain/projection/ProjectionsP3Test.java`:
+
+```java
+package com.yamareviewer.domain.projection;
+
+import java.util.List;
+import java.util.stream.Collectors;
+import static org.junit.Assert.assertEquals;
+import org.junit.Test;
+
+public class ProjectionsP3Test
+{
+	@Test
+	public void standardOrderMatchesSpecSixPointOne()
+	{
+		assertEquals(List.of("phases", "contract", "mode", "glyphs", "attacks", "crashes", "waves", "flares", "specs",
+				"prayer-review", "opener", "tick-log", "damage", "supplies", "death-recap"),
+			Projections.standard().stream().map(projection -> projection.key().name()).collect(Collectors.toList()));
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/domain/projection/DamageAttributionP3Test.java`:
+
+```java
+package com.yamareviewer.domain.projection;
+
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.ids.Role;
+import com.yamareviewer.domain.ids.Rules;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.model.Style;
+import com.yamareviewer.domain.review.DamageSource;
+import com.yamareviewer.domain.review.DamageSummary;
+import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.KillLogBuilder;
+import com.yamareviewer.testing.TestIds;
+import java.util.Map;
+import static org.junit.Assert.assertEquals;
+import org.junit.Test;
+
+/** Runs the whole standard projection list, so Part 2's rules 2 and 5-10 and this part's rules 1, 3 and 4 meet. */
+public class DamageAttributionP3Test
+{
+	private static DamageSummary damage(KillLog log)
+	{
+		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), TestIds.registry(), Rules.DEFAULT);
+		return builder.run(log, ReviewSettings.DEFAULT).value(Sections.DAMAGE).orElseThrow(() -> new AssertionError("damage hidden"));
+	}
+
+	@Test
+	public void standardCrashWaveAndMeleeAreToldApartInOrder()
+	{
+		KillLogBuilder kill = Fights.throughToP3();
+		kill.yamaCasts(Style.MAGIC).ticks(2).impactOn(Actor.SELF, Style.MAGIC).hitsplatOn(Actor.SELF, 2).ticks(3);
+		kill.crashLine(3200, 3203).ticks(1).hitsplatOn(Actor.SELF, 12).ticks(4);
+		kill.waveOn(Actor.SELF).ticks(1).hitsplatOn(Actor.SELF, 8).ticks(4);
+		kill.yamaAnimates(TestIds.id(Role.YAMA_MELEE)).ticks(1).crashLine(3200, 3203).hitsplatOn(Actor.SELF, 20).ticks(4);
+		KillLog log = kill.end(EndReason.YAMA_DIED);
+
+		Map<DamageSource, Integer> bySource = damage(log).bySource(Actor.SELF);
+
+		assertEquals(Integer.valueOf(2), bySource.get(DamageSource.STANDARD));
+		assertEquals(Integer.valueOf(12), bySource.get(DamageSource.SHADOW_CRASH));
+		assertEquals(Integer.valueOf(8), bySource.get(DamageSource.SHADOW_WAVE));
+		assertEquals(Integer.valueOf(20), bySource.get(DamageSource.MELEE));
+		assertEquals(42, damage(log).total(Actor.SELF));
+	}
+
+	@Test
+	public void withoutCrashOrWaveSectionsTheOldRulesStillApply()
+	{
+		KillLog log = Fights.throughToP3().ticks(3).hitsplatOn(Actor.SELF, 7).ticks(3).end(EndReason.YAMA_DIED);
+
+		assertEquals(Integer.valueOf(7), damage(log).bySource(Actor.SELF).get(DamageSource.OTHER));
+	}
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `./gradlew test --tests 'com.yamareviewer.domain.projection.ProjectionsP3Test' --tests 'com.yamareviewer.domain.projection.DamageAttributionP3Test'`
+Expected: FAIL — the order assertion lists only Part 2's seven keys, and `SHADOW_CRASH`/`SHADOW_WAVE`/`STANDARD` are missing from `bySource` (those hits fall to `OTHER`).
+
+- [ ] **Step 3: Write `P3DamageSources`**
+
+`src/main/java/com/yamareviewer/domain/projection/P3DamageSources.java`:
+
+```java
+package com.yamareviewer.domain.projection;
+
+import com.yamareviewer.domain.event.HitsplatObserved;
+import com.yamareviewer.domain.review.CrashLine;
+import com.yamareviewer.domain.review.CrashSummary;
+import com.yamareviewer.domain.review.DamageSource;
+import com.yamareviewer.domain.review.WaveHit;
+import com.yamareviewer.domain.review.WaveSummary;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+
+/**
+ * Damage attribution rules 1, 3 and 4 of spec 6.10, from the Attacks, Crashes and Waves sections.
+ * A hidden section simply contributes no matches, so Part 2's rules take over.
+ */
+public final class P3DamageSources
+{
+	private final Set<String> standardLandings;
+	private final List<CrashLine> crashLines;
+	private final List<WaveHit> waveHits;
+	private final int window;
+
+	public P3DamageSources(ProjectionContext context)
+	{
+		this.standardLandings = context.value(Sections.ATTACKS).map(CrashesProjection::standardLandings).orElse(Set.of());
+		this.crashLines = context.value(Sections.CRASHES).map(CrashSummary::getLines).orElse(List.of());
+		this.waveHits = context.value(Sections.WAVES).map(WaveSummary::getWaves).orElse(List.of());
+		this.window = context.rules().getCrashImpactWindow();
+	}
+
+	/** Rule 1: the landing hitsplat of a standard attack. */
+	public Optional<DamageSource> standard(HitsplatObserved hitsplat)
+	{
+		return standardLandings.contains(hitsplat.getTick() + "/" + hitsplat.getTarget().getKind())
+			? Optional.of(DamageSource.STANDARD)
+			: Optional.empty();
+	}
+
+	/** Rule 3, then rule 4: part of a crash line hit, else part of a wave hit on the same player. */
+	public Optional<DamageSource> crashOrWave(HitsplatObserved hitsplat)
+	{
+		for (CrashLine line : crashLines)
+		{
+			if (line.isHit() && line.getPlayer().equals(hitsplat.getTarget()) && Math.abs(line.getTick() - hitsplat.getTick()) <= window)
+			{
+				return Optional.of(DamageSource.SHADOW_CRASH);
+			}
+		}
+		for (WaveHit wave : waveHits)
+		{
+			if (wave.isHit() && wave.getPlayer().equals(hitsplat.getTarget()) && Math.abs(wave.getTick() - hitsplat.getTick()) <= window)
+			{
+				return Optional.of(DamageSource.SHADOW_WAVE);
+			}
+		}
+		return Optional.empty();
+	}
+}
+```
+
+- [ ] **Step 4: Call it from `DamageAttributionProjection`**
+
+Part 2's `DamageAttributionProjection.project` walks every damage hitsplat on `SELF` or `PARTNER` and picks its source with one method that tries rule 2 (melee, within 2 ticks after `YAMA_MELEE`) first and rules 5–10 after it. Make these changes, keeping Part 2's code for those rules exactly as it is:
+
+1. At the top of `project`, before the loop over hitsplats, build the helper: `P3DamageSources p3 = new P3DamageSources(context);` and pass it to the source-picking method (add a parameter of type `P3DamageSources`).
+2. In the source-picking method, insert rule 1 before Part 2's rule 2, and rules 3 and 4 between Part 2's rule 2 and rule 5, so the method reads:
+
+```java
+		Optional<DamageSource> standard = p3.standard(hitsplat);
+		if (standard.isPresent())
+		{
+			return standard.get();
+		}
+		// Part 2's rule 2 (MELEE / MELEE_SPLASH), unchanged
+		Optional<DamageSource> crashOrWave = p3.crashOrWave(hitsplat);
+		if (crashOrWave.isPresent())
+		{
+			return crashOrWave.get();
+		}
+		// Part 2's rules 5-10, unchanged
+```
+
+`requiredRoles()` of the projection stays as Part 2 defined it: the P3 sections are optional evidence.
+
+- [ ] **Step 5: Put the projections in their final order**
+
+Replace the body of `Projections.standard()` in `src/main/java/com/yamareviewer/domain/projection/Projections.java` (the Part 2 projections keep the constructors Part 2 gave them; they take no arguments):
+
+```java
+	public static List<Projection<?>> standard()
+	{
+		return List.of(
+			new PhasesProjection(),
+			new ContractProjection(),
+			new ModeProjection(),
+			new GlyphsProjection(),
+			new AttacksProjection(),
+			new CrashesProjection(),
+			new WavesProjection(),
+			new FlaresProjection(),
+			new SpecsProjection(),
+			new PrayerReviewProjection(),
+			new OpenerProjection(),
+			new TickLogProjection(),
+			new DamageAttributionProjection(),
+			new SuppliesProjection(),
+			new DeathRecapProjection());
+	}
+```
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+Run: `./gradlew test --tests 'com.yamareviewer.domain.projection.*'`
+Expected: PASS, including Part 2's `DamageAttributionProjectionTest` (rules 2 and 5–10 are untouched) and Part 2's `ProjectionsTest` if it asserted the old order (update that assertion to the fifteen keys above; it is the only Part 2 test whose expectation legitimately changes).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/main/java/com/yamareviewer/domain/projection src/test/java/com/yamareviewer/domain/projection
+git commit -m "feat: attribute standard, crash and wave damage and finalise the projection order"
+```
+
+---
+
+### Task 15: Text output and history fields
+
+**Files:**
+- Create: `src/main/java/com/yamareviewer/domain/text/P3Text.java`
+- Modify: `src/main/java/com/yamareviewer/domain/text/ReviewFormatter.java`, `ChatLines.java`, `ClipboardExport.java`, `src/main/java/com/yamareviewer/domain/history/HistoryProjector.java`
+- Create: `src/test/java/com/yamareviewer/testing/P3Reviews.java`
+- Test: `src/test/java/com/yamareviewer/domain/text/P3TextTest.java`, `src/test/java/com/yamareviewer/domain/text/P3TextIntegrationTest.java`, `src/test/java/com/yamareviewer/domain/history/HistoryProjectorP3Test.java`
+
+**Interfaces:**
+- Consumes: `KillReview`, `ViewSection`, `ReviewView`, `ReviewFormatter.format`, `ChatLines.lines`, `ChatLineOptions`, `ClipboardExport.text`, `HistoryProjector.summarize`, `KillSummary` (Part 2), every result type of Task 2.
+- Produces: `P3Text.prayerLine(KillReview)` (chat line 2), `P3Text.specFragment(KillReview)` (the text after `Specs: ` in chat line 4), `P3Text.opener`, `prayerTimeline`, `crashLines`, `waves`, `specs`, `tickLog` (each `KillReview -> ViewSection`, titles `"Opener"`, `"P3 prayers"`, `"Crash lines"`, `"Waves"`, `"Specs and drains"`, `"P3 tick log"`), `P3Text.hiddenText(HiddenReason)`; `P3Reviews.sample()` and `P3Reviews.allHidden()` for tests; `KillSummary.p3Accuracy`, `defenceDrained`, `specLandedShare` filled by `HistoryProjector.summarize`.
+
+- [ ] **Step 1: Write the test fixture and the failing tests**
+
+`src/test/java/com/yamareviewer/testing/P3Reviews.java`:
+
+```java
+package com.yamareviewer.testing;
+
+import com.yamareviewer.domain.drain.SpecWeapon;
+import com.yamareviewer.domain.drain.YamaStats;
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.event.Position;
+import com.yamareviewer.domain.model.Contract;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.model.Phase;
+import com.yamareviewer.domain.model.Style;
+import com.yamareviewer.domain.review.Attack;
+import com.yamareviewer.domain.review.AttackResult;
+import com.yamareviewer.domain.review.CrashLine;
+import com.yamareviewer.domain.review.CrashSummary;
+import com.yamareviewer.domain.review.DrainStep;
+import com.yamareviewer.domain.review.GlyphCount;
+import com.yamareviewer.domain.review.HiddenReason;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.review.Opener;
+import com.yamareviewer.domain.review.PrayerOutcome;
+import com.yamareviewer.domain.review.PrayerReview;
+import com.yamareviewer.domain.review.ReviewStatus;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.domain.review.SpecOutcome;
+import com.yamareviewer.domain.review.SpecResult;
+import com.yamareviewer.domain.review.SpecSummary;
+import com.yamareviewer.domain.review.TickLog;
+import com.yamareviewer.domain.review.TickLogEntry;
+import com.yamareviewer.domain.review.WaveHit;
+import com.yamareviewer.domain.review.WaveSummary;
+import java.util.List;
+
+/** KillReviews with the Part 3 sections filled by hand; the Part 2 sections are hidden. */
+public final class P3Reviews
+{
+	private P3Reviews()
+	{
+	}
+
+	public static KillReview.KillReviewBuilder base()
+	{
+		return KillReview.builder()
+			.reviewSchemaVersion(KillReview.SCHEMA_VERSION)
+			.killId("kill-1")
+			.startEpochMs(1_000L)
+			.endEpochMs(2_000L)
+			.endReason(EndReason.YAMA_DIED)
+			.mode(Mode.SOLO)
+			.contract(Contract.NONE)
+			.status(ReviewStatus.COMPLETE)
+			.skippedEvents(0)
+			.phases(Section.hidden(HiddenReason.NOT_APPLICABLE))
+			.damage(Section.hidden(HiddenReason.NOT_APPLICABLE))
+			.flares(Section.hidden(HiddenReason.NOT_APPLICABLE))
+			.supplies(Section.hidden(HiddenReason.NOT_APPLICABLE))
+			.deathRecap(Section.hidden(HiddenReason.NOT_APPLICABLE));
+	}
+
+	public static KillReview allHidden()
+	{
+		return base()
+			.prayerReview(Section.hidden(HiddenReason.IDS_NOT_CAPTURED))
+			.opener(Section.hidden(HiddenReason.CONTRACT))
+			.tickLog(Section.hidden(HiddenReason.HEALTH_CHECK_FAILED))
+			.crashes(Section.hidden(HiddenReason.IDS_NOT_CAPTURED))
+			.waves(Section.hidden(HiddenReason.ERROR))
+			.specs(Section.hidden(HiddenReason.NOT_APPLICABLE))
+			.build();
+	}
+
+	public static KillReview sample()
+	{
+		Attack first = new Attack(40, Phase.P3, Style.MAGIC, Actor.SELF, 42, 2);
+		AttackResult firstResult = new AttackResult(first, 40, PrayerOutcome.BLOCKED, null);
+		PrayerReview prayers = new PrayerReview(List.of(
+			firstResult,
+			new AttackResult(new Attack(47, Phase.P3, Style.RANGED, Actor.SELF, 49, 0), 47, PrayerOutcome.TOO_EARLY, 4),
+			new AttackResult(new Attack(54, Phase.P3, Style.MAGIC, Actor.SELF, 56, 1), 54, PrayerOutcome.BLOCKED, 7)),
+			0, "lost alternation", List.of());
+		Position centre = new Position(3200, 3203, 0);
+		SpecResult maul = new SpecResult(2, Phase.P1, Actor.SELF, SpecWeapon.ELDER_MAUL, true, Actor.YAMA, SpecOutcome.LANDED, 60, 50, null, null);
+		return base()
+			.prayerReview(Section.ok(prayers))
+			.opener(Section.ok(new Opener(new GlyphCount(3, 1), Style.MAGIC, first, true, firstResult)))
+			.tickLog(Section.ok(new TickLog(List.of(
+				new TickLogEntry(40, Style.MAGIC, Actor.SELF, null, List.of()),
+				new TickLogEntry(47, Style.RANGED, Actor.SELF, 7, List.of()),
+				new TickLogEntry(56, Style.MAGIC, Actor.SELF, 9, List.of("crash line at 50"))), 7)))
+			.crashes(Section.ok(new CrashSummary(List.of(
+				new CrashLine(50, Phase.P3, Actor.SELF, 1, 1, centre, false, 0),
+				new CrashLine(54, Phase.P3, Actor.SELF, 1, 2, centre, true, 12),
+				new CrashLine(58, Phase.P3, Actor.SELF, 1, 3, centre, false, 0)))))
+			.waves(Section.ok(new WaveSummary(List.of(
+				new WaveHit(60, Phase.P3, Actor.SELF, true, 15, true),
+				new WaveHit(64, Phase.P3, Actor.SELF, false, 0, false)))))
+			.specs(Section.ok(new SpecSummary(List.of(maul), List.of(),
+				List.of(new DrainStep(2, Phase.P1, "Elder maul", new YamaStats(225, 250, 0), new YamaStats(147, 250, 0))),
+				new YamaStats(225, 250, 0), new YamaStats(147, 250, 0), 147, Phase.P1)))
+			.build();
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/domain/text/P3TextTest.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.review.HiddenReason;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.testing.P3Reviews;
+import java.util.List;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import org.junit.Test;
+
+public class P3TextTest
+{
+	private final KillReview sample = P3Reviews.sample();
+	private final KillReview hidden = P3Reviews.allHidden();
+
+	@Test
+	public void chatLineTwo()
+	{
+		assertEquals("P3 prayers 2/3 blocked (1 too early). Crash lines 2/3 dodged. Waves 1/2.", P3Text.prayerLine(sample));
+		assertEquals("P3 prayers n/a. Crash lines n/a. Waves n/a.", P3Text.prayerLine(hidden));
+	}
+
+	@Test
+	public void specFragmentOfChatLineFour()
+	{
+		assertEquals("Def 225→147 in P1 (1/1 Elder maul)", P3Text.specFragment(sample));
+		assertEquals("n/a", P3Text.specFragment(hidden));
+	}
+
+	@Test
+	public void openerSection()
+	{
+		ViewSection section = P3Text.opener(sample);
+
+		assertEquals("Opener", section.getTitle());
+		assertNull(section.getHiddenReason());
+		assertEquals(List.of(
+			"P2 glyphs: 3 fire, 1 shadow: magic opener expected.",
+			"Yama's first P3 attack: magic on you, as expected.",
+			"Your first P3 attack: blocked."), section.getLines());
+	}
+
+	@Test
+	public void prayerTimelineSection()
+	{
+		ViewSection section = P3Text.prayerTimeline(sample);
+
+		assertEquals("P3 prayers", section.getTitle());
+		assertEquals(List.of(
+			"2/3 blocked, 1 mistake (1 too early).",
+			"#1 t40 magic: blocked",
+			"#2 t47 ranged: too early (switched after 4 ticks)",
+			"#3 t54 magic: blocked (switched after 7 ticks)"), section.getLines());
+	}
+
+	@Test
+	public void crashAndWaveSections()
+	{
+		assertEquals(List.of(
+			"You: 2/3 dodged, 12 damage.",
+			"Set 1 line 1 t50: dodged",
+			"Set 1 line 2 t54: hit (12)",
+			"Set 1 line 3 t58: dodged"), P3Text.crashLines(sample).getLines());
+		assertEquals(List.of(
+			"You: 1/2 dodged, 15 damage, prayers disabled 1x.",
+			"t60: hit (15), prayers disabled",
+			"t64: dodged"), P3Text.waves(sample).getLines());
+	}
+
+	@Test
+	public void specsSection()
+	{
+		ViewSection section = P3Text.specs(sample);
+
+		assertEquals("Specs and drains", section.getTitle());
+		assertEquals(List.of(
+			"Defence 225→147 (lowest, in P1), 78 of 80 drained (modelled).",
+			"Elder maul: 1/1 landed, 60 avg damage",
+			"Spec energy per Defence point drained: 0.6%.",
+			"t2 Elder maul: Def 225→147"), section.getLines());
+	}
+
+	@Test
+	public void tickLogSection()
+	{
+		ViewSection section = P3Text.tickLog(sample);
+
+		assertEquals("P3 tick log", section.getTitle());
+		assertEquals(List.of(
+			"Gaps of 7 ticks: 1/2.",
+			"t40 magic → you",
+			"t47 ranged → you (+7)",
+			"t56 magic → you (+9: crash line at 50)"), section.getLines());
+	}
+
+	@Test
+	public void hiddenSectionsCarryTheirReasonAndNoLines()
+	{
+		ViewSection section = P3Text.prayerTimeline(hidden);
+
+		assertTrue(section.getLines().isEmpty());
+		assertEquals(P3Text.hiddenText(HiddenReason.IDS_NOT_CAPTURED), section.getHiddenReason());
+		assertEquals(P3Text.hiddenText(HiddenReason.CONTRACT), P3Text.opener(hidden).getHiddenReason());
+		assertEquals("Hidden: game IDs not captured", P3Text.hiddenText(HiddenReason.IDS_NOT_CAPTURED));
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/domain/text/P3TextIntegrationTest.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.testing.P3Reviews;
+import java.util.List;
+import java.util.stream.Collectors;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+import org.junit.Test;
+
+/** The Part 2 entry points carry the Part 3 text. */
+public class P3TextIntegrationTest
+{
+	private final KillReview sample = P3Reviews.sample();
+	private final ChatLineOptions allLines = new ChatLineOptions(true, true, true, true, false);
+
+	@Test
+	public void chatLinesTwoAndFour()
+	{
+		List<String> lines = ChatLines.lines(sample, allLines);
+
+		assertEquals(4, lines.size());
+		assertEquals("P3 prayers 2/3 blocked (1 too early). Crash lines 2/3 dodged. Waves 1/2.", lines.get(1));
+		assertTrue(lines.get(3), lines.get(3).startsWith("Specs: Def 225→147 in P1 (1/1 Elder maul). Supplies"));
+	}
+
+	@Test
+	public void hiddenValuesPrintNotAvailable()
+	{
+		List<String> lines = ChatLines.lines(P3Reviews.allHidden(), allLines);
+
+		assertEquals("P3 prayers n/a. Crash lines n/a. Waves n/a.", lines.get(1));
+		assertTrue(lines.get(3), lines.get(3).startsWith("Specs: n/a. Supplies"));
+	}
+
+	@Test
+	public void theFormatterShowsTheSixSectionsInTheSpecsOrder()
+	{
+		List<String> titles = ReviewFormatter.format(sample).getSections().stream().map(ViewSection::getTitle).collect(Collectors.toList());
+
+		List<String> p3Titles = titles.stream()
+			.filter(title -> List.of("Opener", "P3 prayers", "Crash lines", "Waves", "Specs and drains", "P3 tick log").contains(title))
+			.collect(Collectors.toList());
+		assertEquals(List.of("Opener", "P3 prayers", "Crash lines", "Waves", "Specs and drains", "P3 tick log"), p3Titles);
+		assertEquals("P3 tick log", titles.get(titles.size() - 1));
+		assertTrue(titles.indexOf("Waves") < titles.indexOf("Specs and drains"));
+	}
+
+	@Test
+	public void theFormatterShowsAHiddenReasonInOneLine()
+	{
+		ViewSection opener = ReviewFormatter.format(P3Reviews.allHidden()).getSections().stream()
+			.filter(section -> section.getTitle().equals("Opener")).findFirst().orElseThrow(() -> new AssertionError("no opener"));
+
+		assertNotNull(opener.getHiddenReason());
+		assertTrue(opener.getLines().isEmpty());
+	}
+
+	@Test
+	public void theClipboardTextCarriesTheChatLinesAndTheSpecEfficiency()
+	{
+		String text = ClipboardExport.text(sample);
+
+		assertTrue(text, text.contains("P3 prayers 2/3 blocked (1 too early). Crash lines 2/3 dodged. Waves 1/2."));
+		assertTrue(text, text.contains("Elder maul: 1/1 landed, 60 avg damage"));
+		assertTrue(text, text.contains("Defence 225→147 (lowest, in P1), 78 of 80 drained (modelled)."));
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/domain/history/HistoryProjectorP3Test.java`:
+
+```java
+package com.yamareviewer.domain.history;
+
+import com.yamareviewer.testing.P3Reviews;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import org.junit.Test;
+
+public class HistoryProjectorP3Test
+{
+	@Test
+	public void summarizeFillsThePart3Fields()
+	{
+		KillSummary summary = HistoryProjector.summarize(P3Reviews.sample());
+
+		assertEquals(Double.valueOf(2.0 / 3.0), summary.getP3Accuracy());
+		assertEquals(Integer.valueOf(78), summary.getDefenceDrained());
+		assertEquals(Double.valueOf(1.0), summary.getSpecLandedShare());
+	}
+
+	@Test
+	public void hiddenSectionsLeaveThemNull()
+	{
+		KillSummary summary = HistoryProjector.summarize(P3Reviews.allHidden());
+
+		assertNull(summary.getP3Accuracy());
+		assertNull(summary.getDefenceDrained());
+		assertNull(summary.getSpecLandedShare());
+	}
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `./gradlew test --tests 'com.yamareviewer.domain.text.P3TextTest' --tests 'com.yamareviewer.domain.text.P3TextIntegrationTest' --tests 'com.yamareviewer.domain.history.HistoryProjectorP3Test'`
+Expected: FAIL — `cannot find symbol: class P3Text`; the integration and history tests fail on `n/a` placeholders and null fields.
+
+- [ ] **Step 3: Write `P3Text`**
+
+`src/main/java/com/yamareviewer/domain/text/P3Text.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.drain.SpecWeapon;
+import com.yamareviewer.domain.drain.YamaStats;
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.model.Phase;
+import com.yamareviewer.domain.model.Style;
+import com.yamareviewer.domain.review.AttackResult;
+import com.yamareviewer.domain.review.CrashLine;
+import com.yamareviewer.domain.review.CrashSummary;
+import com.yamareviewer.domain.review.DrainStep;
+import com.yamareviewer.domain.review.HiddenReason;
+import com.yamareviewer.domain.review.HornUse;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.review.Opener;
+import com.yamareviewer.domain.review.PrayerOutcome;
+import com.yamareviewer.domain.review.PrayerReview;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.domain.review.SpecOutcome;
+import com.yamareviewer.domain.review.SpecResult;
+import com.yamareviewer.domain.review.SpecSummary;
+import com.yamareviewer.domain.review.TickLog;
+import com.yamareviewer.domain.review.TickLogEntry;
+import com.yamareviewer.domain.review.WaveHit;
+import com.yamareviewer.domain.review.WaveSummary;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.function.Function;
+
+/** Every Part 3 line of chat, panel and clipboard (spec 7.2-7.4). Pure strings; never a player name. */
+public final class P3Text
+{
+	static final String NA = "n/a";
+	static final String ARROW = "→";
+
+	private P3Text()
+	{
+	}
+
+	/** Chat line 2: "P3 prayers 17/19 blocked (2 too early). Crash lines 8/9 dodged. Waves 5/6." */
+	public static String prayerLine(KillReview review)
+	{
+		StringBuilder line = new StringBuilder("P3 prayers ");
+		if (review.getPrayerReview().isOk())
+		{
+			PrayerReview prayers = review.getPrayerReview().value();
+			line.append(prayers.blocked()).append('/').append(prayers.scored()).append(" blocked");
+			String detail = mistakeDetail(prayers);
+			if (!detail.isEmpty())
+			{
+				line.append(" (").append(detail).append(')');
+			}
+		}
+		else
+		{
+			line.append(NA);
+		}
+		line.append(". Crash lines ");
+		if (review.getCrashes().isOk())
+		{
+			CrashSummary crashes = review.getCrashes().value();
+			line.append(crashes.dodged(Actor.SELF)).append('/').append(crashes.total(Actor.SELF)).append(" dodged");
+		}
+		else
+		{
+			line.append(NA);
+		}
+		line.append(". Waves ");
+		if (review.getWaves().isOk())
+		{
+			WaveSummary waves = review.getWaves().value();
+			line.append(waves.dodged(Actor.SELF)).append('/').append(waves.total(Actor.SELF));
+		}
+		else
+		{
+			line.append(NA);
+		}
+		return line.append('.').toString();
+	}
+
+	/** The text after "Specs: " in chat line 4: "Def 225→145 in P1 (3/3 Emberlight)", "none" or "n/a". */
+	public static String specFragment(KillReview review)
+	{
+		if (!review.getSpecs().isOk())
+		{
+			return NA;
+		}
+		SpecSummary specs = review.getSpecs().value();
+		if (specs.getSpecs().isEmpty())
+		{
+			return "none";
+		}
+		StringBuilder text = new StringBuilder("Def ").append(specs.getBase().getDefence()).append(ARROW).append(specs.getLowestDefence());
+		if (specs.getLowestDefencePhase() != null)
+		{
+			text.append(" in ").append(phase(specs.getLowestDefencePhase()));
+		}
+		List<String> tallies = new ArrayList<>();
+		for (SpecWeapon weapon : specs.weaponsUsed())
+		{
+			tallies.add(specs.landed(weapon) + "/" + specs.used(weapon) + " " + weapon.displayName());
+		}
+		if (specs.otherWeaponSpecs() > 0)
+		{
+			tallies.add(specs.otherWeaponSpecs() + " other");
+		}
+		if (!tallies.isEmpty())
+		{
+			text.append(" (").append(String.join(", ", tallies)).append(')');
+		}
+		return text.toString();
+	}
+
+	public static ViewSection opener(KillReview review)
+	{
+		return section("Opener", review.getOpener(), opener ->
+		{
+			List<String> lines = new ArrayList<>();
+			String glyphs = "P2 glyphs: " + opener.getGlyphs().getFire() + " fire, " + opener.getGlyphs().getShadow() + " shadow: ";
+			lines.add(glyphs + (opener.getExpectedStyle() == null ? "no expectation." : style(opener.getExpectedStyle()) + " opener expected."));
+			if (opener.getFirstAttack() == null)
+			{
+				lines.add("Yama's first P3 attack: none seen.");
+			}
+			else
+			{
+				String verdict = opener.getAsExpected() == null ? "" : opener.getAsExpected() ? ", as expected" : ", not as expected";
+				lines.add("Yama's first P3 attack: " + style(opener.getFirstAttack().getStyle()) + " on "
+					+ who(opener.getFirstAttack().getTarget()) + verdict + ".");
+			}
+			lines.add(opener.getFirstOwnResult() == null
+				? "Your first P3 attack: not scored."
+				: "Your first P3 attack: " + labelOf(review, opener.getFirstOwnResult().getOutcome()) + ".");
+			return lines;
+		});
+	}
+
+	public static ViewSection prayerTimeline(KillReview review)
+	{
+		return section("P3 prayers", review.getPrayerReview(), prayers ->
+		{
+			List<String> lines = new ArrayList<>(prayers.getNotes());
+			StringBuilder summary = new StringBuilder().append(prayers.blocked()).append('/').append(prayers.scored()).append(" blocked, ");
+			if (prayers.mistakes() == 0)
+			{
+				summary.append("no mistakes");
+			}
+			else
+			{
+				summary.append(prayers.mistakes()).append(prayers.mistakes() == 1 ? " mistake (" : " mistakes (").append(mistakeDetail(prayers)).append(')');
+			}
+			if (prayers.getUnscored() > 0)
+			{
+				summary.append(", ").append(prayers.getUnscored()).append(" not scored");
+			}
+			lines.add(summary.append('.').toString());
+			int number = 0;
+			for (AttackResult result : prayers.getResults())
+			{
+				number++;
+				String line = "#" + number + " t" + result.getAttack().getCastTick() + " " + style(result.getAttack().getStyle()) + ": "
+					+ prayers.label(result.getOutcome());
+				if (result.getSwitchTicks() != null)
+				{
+					line += " (switched after " + result.getSwitchTicks() + " ticks)";
+				}
+				lines.add(line);
+			}
+			return lines;
+		});
+	}
+
+	public static ViewSection crashLines(KillReview review)
+	{
+		return section("Crash lines", review.getCrashes(), crashes ->
+		{
+			List<String> lines = new ArrayList<>();
+			lines.add("You: " + crashes.dodged(Actor.SELF) + "/" + crashes.total(Actor.SELF) + " dodged, " + crashes.damage(Actor.SELF) + " damage.");
+			if (crashes.total(Actor.PARTNER) > 0)
+			{
+				lines.add("Partner: " + crashes.dodged(Actor.PARTNER) + "/" + crashes.total(Actor.PARTNER) + " dodged, "
+					+ crashes.damage(Actor.PARTNER) + " damage.");
+			}
+			for (CrashLine line : crashes.forPlayer(Actor.SELF))
+			{
+				lines.add("Set " + line.getSet() + " line " + line.getIndexInSet() + " t" + line.getTick() + ": "
+					+ (line.isHit() ? "hit (" + line.getDamage() + ")" : "dodged"));
+			}
+			return lines;
+		});
+	}
+
+	public static ViewSection waves(KillReview review)
+	{
+		return section("Waves", review.getWaves(), waves ->
+		{
+			List<String> lines = new ArrayList<>();
+			String you = "You: " + waves.dodged(Actor.SELF) + "/" + waves.total(Actor.SELF) + " dodged, " + waves.damage(Actor.SELF) + " damage";
+			if (waves.prayersDisabled(Actor.SELF) > 0)
+			{
+				you += ", prayers disabled " + waves.prayersDisabled(Actor.SELF) + "x";
+			}
+			lines.add(you + ".");
+			if (waves.total(Actor.PARTNER) > 0)
+			{
+				lines.add("Partner: " + waves.dodged(Actor.PARTNER) + "/" + waves.total(Actor.PARTNER) + " dodged, "
+					+ waves.damage(Actor.PARTNER) + " damage.");
+			}
+			for (WaveHit wave : waves.forPlayer(Actor.SELF))
+			{
+				String line = "t" + wave.getTick() + ": " + (wave.isHit() ? "hit (" + wave.getDamage() + ")" : "dodged");
+				if (wave.isPrayersDisabled())
+				{
+					line += ", prayers disabled";
+				}
+				lines.add(line);
+			}
+			return lines;
+		});
+	}
+
+	public static ViewSection specs(KillReview review)
+	{
+		return section("Specs and drains", review.getSpecs(), P3Text::specLines);
+	}
+
+	public static ViewSection tickLog(KillReview review)
+	{
+		return section("P3 tick log", review.getTickLog(), tickLog ->
+		{
+			List<String> lines = new ArrayList<>();
+			lines.add(tickLog.gaps() == 0
+				? "Fewer than two P3 attacks seen."
+				: "Gaps of " + tickLog.getCycle() + " ticks: " + tickLog.gapsOnCycle() + "/" + tickLog.gaps() + ".");
+			for (TickLogEntry entry : tickLog.getEntries())
+			{
+				String line = "t" + entry.getTick() + " " + style(entry.getStyle()) + " " + ARROW + " " + who(entry.getTarget());
+				if (entry.getGap() != null)
+				{
+					line += " (+" + entry.getGap() + (entry.getAnnotations().isEmpty() ? "" : ": " + String.join(", ", entry.getAnnotations())) + ")";
+				}
+				lines.add(line);
+			}
+			return lines;
+		});
+	}
+
+	public static String hiddenText(HiddenReason reason)
+	{
+		switch (reason)
+		{
+			case IDS_NOT_CAPTURED:
+				return "Hidden: game IDs not captured";
+			case CONTRACT:
+				return "Not meaningful under this contract";
+			case HEALTH_CHECK_FAILED:
+				return "Hidden: a health check failed";
+			case ERROR:
+				return "Hidden: an error occurred while reviewing";
+			default:
+				return "Not applicable to this kill";
+		}
+	}
+
+	/** The specs section lines; also the "spec efficiency" block of the clipboard text (spec 7.4). */
+	static List<String> specLines(SpecSummary specs)
+	{
+		List<String> lines = new ArrayList<>();
+		YamaStats base = specs.getBase();
+		if (specs.defenceDrained() == 0)
+		{
+			lines.add("Defence " + base.getDefence() + ": nothing drained (modelled).");
+		}
+		else
+		{
+			lines.add("Defence " + base.getDefence() + ARROW + specs.getLowestDefence() + " (lowest, in " + phase(specs.getLowestDefencePhase()) + "), "
+				+ specs.defenceDrained() + " of " + specs.maxDefenceDrain() + " drained (modelled).");
+		}
+		int lowestMagic = base.getMagic();
+		for (DrainStep step : specs.getDrains())
+		{
+			lowestMagic = Math.min(lowestMagic, step.getAfter().getMagic());
+		}
+		if (lowestMagic < base.getMagic())
+		{
+			lines.add("Magic " + base.getMagic() + ARROW + lowestMagic + " (modelled).");
+		}
+		if (specs.getFinalStats().getMagicDefenceBonusDrained() > 0)
+		{
+			lines.add("Magic defence bonus drained: " + specs.getFinalStats().getMagicDefenceBonusDrained() + ".");
+		}
+		for (SpecWeapon weapon : specs.weaponsUsed())
+		{
+			String line = weapon.displayName() + ": " + specs.landed(weapon) + "/" + specs.used(weapon) + " landed";
+			String average = averageDamage(specs, weapon);
+			lines.add(average.isEmpty() ? line : line + ", " + average);
+		}
+		if (specs.otherWeaponSpecs() > 0)
+		{
+			int damage = 0;
+			for (SpecResult spec : specs.getSpecs())
+			{
+				damage += spec.isOtherWeapon() && spec.getDamage() != null ? spec.getDamage() : 0;
+			}
+			lines.add("Other weapon: " + specs.otherWeaponSpecs() + (specs.otherWeaponSpecs() == 1 ? " spec, " : " specs, ") + damage + " damage.");
+		}
+		if (specs.defenceDrained() > 0 && specs.ownEnergyUsedOnDrains() > 0)
+		{
+			lines.add(String.format(Locale.ROOT, "Spec energy per Defence point drained: %.1f%%.",
+				(double) specs.ownEnergyUsedOnDrains() / specs.defenceDrained()));
+		}
+		for (HornUse horn : specs.getHorns())
+		{
+			String line = "Soulflame horn t" + horn.getTick() + " (" + who(horn.getUser()) + "): ";
+			if (horn.isUnused())
+			{
+				line += "unused.";
+			}
+			else
+			{
+				SpecResult assisted = horn.getAssistedSpec();
+				line += "assisted " + assisted.weaponName() + " at t" + assisted.getTick() + ", " + outcome(assisted.getOutcome()) + ".";
+			}
+			lines.add(line);
+		}
+		for (SpecResult spec : specs.getSpecs())
+		{
+			if (spec.getHpRestored() != null)
+			{
+				lines.add("t" + spec.getTick() + " Saradomin godsword restored " + spec.getHpRestored() + " HP and " + spec.getPrayerRestored() + " prayer points.");
+			}
+		}
+		for (DrainStep step : specs.getDrains())
+		{
+			List<String> changes = new ArrayList<>();
+			if (step.getBefore().getDefence() != step.getAfter().getDefence())
+			{
+				changes.add("Def " + step.getBefore().getDefence() + ARROW + step.getAfter().getDefence());
+			}
+			if (step.getBefore().getMagic() != step.getAfter().getMagic())
+			{
+				changes.add("Magic " + step.getBefore().getMagic() + ARROW + step.getAfter().getMagic());
+			}
+			if (step.getBefore().getMagicDefenceBonusDrained() != step.getAfter().getMagicDefenceBonusDrained())
+			{
+				changes.add("magic defence bonus " + step.getBefore().getMagicDefenceBonusDrained() + ARROW + step.getAfter().getMagicDefenceBonusDrained());
+			}
+			lines.add("t" + step.getTick() + " " + step.getCause() + ": " + (changes.isEmpty() ? "no change" : String.join(", ", changes)));
+		}
+		return lines;
+	}
+
+	private static String averageDamage(SpecSummary specs, SpecWeapon weapon)
+	{
+		int total = 0;
+		int count = 0;
+		for (SpecResult spec : specs.getSpecs())
+		{
+			if (spec.getWeapon() == weapon && spec.getDamage() != null)
+			{
+				total += spec.getDamage();
+				count++;
+			}
+		}
+		return count == 0 ? "" : (total / count) + " avg damage";
+	}
+
+	private static String mistakeDetail(PrayerReview prayers)
+	{
+		List<String> parts = new ArrayList<>();
+		for (PrayerOutcome outcome : List.of(PrayerOutcome.TOO_EARLY, PrayerOutcome.LATE, PrayerOutcome.LOST_ALTERNATION, PrayerOutcome.NO_PRAYER))
+		{
+			if (prayers.count(outcome) > 0)
+			{
+				parts.add(prayers.count(outcome) + " " + prayers.label(outcome));
+			}
+		}
+		return String.join(", ", parts);
+	}
+
+	private static String labelOf(KillReview review, PrayerOutcome outcome)
+	{
+		return review.getPrayerReview().isOk()
+			? review.getPrayerReview().value().label(outcome)
+			: new PrayerReview(List.of(), 0, "lost alternation", List.of()).label(outcome);
+	}
+
+	private static <T> ViewSection section(String title, Section<T> section, Function<T, List<String>> lines)
+	{
+		if (section.isOk())
+		{
+			return new ViewSection(title, lines.apply(section.value()), null);
+		}
+		return new ViewSection(title, List.of(), hiddenText(section.hiddenReason().orElse(HiddenReason.NOT_APPLICABLE)));
+	}
+
+	static String who(Actor actor)
+	{
+		if (Actor.SELF.equals(actor))
+		{
+			return "you";
+		}
+		return Actor.PARTNER.equals(actor) ? "partner" : "unknown";
+	}
+
+	static String style(Style style)
+	{
+		if (style == null)
+		{
+			return "unknown style";
+		}
+		return style == Style.MAGIC ? "magic" : "ranged";
+	}
+
+	static String phase(Phase phase)
+	{
+		if (phase == null)
+		{
+			return "an unknown phase";
+		}
+		switch (phase)
+		{
+			case P1:
+				return "P1";
+			case JUDGE_1:
+				return "Judge 1";
+			case P2:
+				return "P2";
+			case JUDGE_2:
+				return "Judge 2";
+			default:
+				return "P3";
+		}
+	}
+
+	private static String outcome(SpecOutcome outcome)
+	{
+		switch (outcome)
+		{
+			case LANDED:
+				return "landed";
+			case MISSED:
+				return "missed";
+			default:
+				return "result unknown";
+		}
+	}
+}
+```
+
+- [ ] **Step 4: Call it from the Part 2 text classes and the history projector**
+
+`src/main/java/com/yamareviewer/domain/text/ChatLines.java`: Part 2's `lines(review, options)` appends line 2 (behind `options.isPrayerLine()`) and line 4 (behind `options.isSpecLine()`) with `n/a` placeholders for the prayer, crash, wave and spec values. Replace the expression that builds line 2 with:
+
+```java
+			lines.add(P3Text.prayerLine(review));
+```
+
+and the `"Specs: n/a"` part of line 4 with `"Specs: " + P3Text.specFragment(review)`, keeping Part 2's `". Supplies …"` tail exactly as it is, so line 4 reads `Specs: Def 225→145 in P1 (3/3 Emberlight). Supplies 318k.`.
+
+`src/main/java/com/yamareviewer/domain/text/ReviewFormatter.java`: `format` builds its `List<ViewSection>` in display order (death recap when you died, phase times, damage). Insert the Part 3 sections so the final order is the one of spec 7.3:
+
+```java
+		// after the damage section
+		sections.add(P3Text.opener(review));
+		sections.add(P3Text.prayerTimeline(review));
+		sections.add(P3Text.crashLines(review));
+		sections.add(P3Text.waves(review));
+		// Part 2's flares section
+		sections.add(P3Text.specs(review));
+		// Part 2's supplies section
+		sections.add(P3Text.tickLog(review));
+```
+
+(`sections` is Part 2's list variable; use its actual name.)
+
+`src/main/java/com/yamareviewer/domain/text/ClipboardExport.java`: `text` joins the chat lines (all options on), supplies, and the death recap. After the chat lines, add the spec efficiency block (spec 7.4):
+
+```java
+		ViewSection specs = P3Text.specs(review);
+		text.append("Specs and drains").append('\n');
+		if (specs.getHiddenReason() != null)
+		{
+			text.append(specs.getHiddenReason()).append('\n');
+		}
+		for (String line : specs.getLines())
+		{
+			text.append(line).append('\n');
+		}
+```
+
+(`text` is Part 2's `StringBuilder`; if Part 2 collects lines in a `List<String>` instead, add the same strings to that list.)
+
+`src/main/java/com/yamareviewer/domain/history/HistoryProjector.java`: in `summarize`, add these three calls to the `KillSummary.builder()` chain before `.build()`:
+
+```java
+			.p3Accuracy(review.getPrayerReview().asOptional().flatMap(PrayerReview::accuracy).orElse(null))
+			.defenceDrained(review.getSpecs().asOptional().map(SpecSummary::defenceDrained).orElse(null))
+			.specLandedShare(review.getSpecs().asOptional().flatMap(SpecSummary::landedShare).orElse(null))
+```
+
+with the imports `com.yamareviewer.domain.review.PrayerReview` and `com.yamareviewer.domain.review.SpecSummary`. `HistoryProjector.index` already averages and trends `p3Accuracy` and `defenceDrained` from the summaries (Part 2 wrote it against null-safe fields), so nothing else changes.
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `./gradlew test --tests 'com.yamareviewer.domain.text.*' --tests 'com.yamareviewer.domain.history.*'`
+Expected: PASS, including Part 2's text and history tests. If a Part 2 `ChatLinesTest` asserted the literal `n/a` placeholders of lines 2 or 4 for a review without Part 3 sections, it still passes: the sections are hidden there and print `n/a`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/main/java/com/yamareviewer/domain/text src/main/java/com/yamareviewer/domain/history src/test/java/com/yamareviewer/testing/P3Reviews.java src/test/java/com/yamareviewer/domain/text src/test/java/com/yamareviewer/domain/history
+git commit -m "feat: show the P3 review in chat, panel, clipboard and history"
+```
+
+---
+
+### Task 16: Golden tests from the logging kills (REQUIRES THE USER'S LOGGING KILLS)
+
+This task cannot be completed by an agent alone. It needs the five raw logs of the logging kills (`docs/logging-kills.md`), which only the user can produce in game, and a hand review of each generated expectation. Do the code steps (1–6) in any case; the fixture steps (7–9) wait for the logs. Until fixtures exist the golden test skips itself, so the build stays green.
+
+**Files:**
+- Create: `src/test/java/com/yamareviewer/tools/RawLogs.java`, `src/test/java/com/yamareviewer/tools/FixtureScrubber.java`
+- Replace: `src/test/java/com/yamareviewer/tools/Replay.java` (Part 2's version printed the formatter output; this one also writes the review JSON)
+- Modify: `build.gradle` (add the `scrubFixture` task; `replay` exists from Part 2)
+- Create: `src/test/resources/fixtures/.gitkeep`
+- Test: `src/test/java/com/yamareviewer/tools/FixtureScrubberTest.java`, `src/test/java/com/yamareviewer/GoldenReviewTest.java`
+
+**Interfaces:**
+- Consumes: `GsonLogRepository`, `EventCodec`, `InMemoryFileStore` (Part 1), `BuiltInIds.registry()` (Part 1), `ReviewBuilder`, `Projections.standard()`, `KillReviewAssembler`, `ReviewSettings.DEFAULT`, `ReviewFormatter` (Part 2), every projection of this part.
+- Produces: `RawLogs.read(Path)`, `RawLogs.write(KillLog, Path)`; `FixtureScrubber.scrub(KillLog)` (names replaced, OTHER-actor events dropped); `Replay.review(KillLog)`, `Replay.json(KillReview)`, `Replay.GSON`; `./gradlew replay --args="<log.jsonl.gz> [<expected.review.json>]"`, `./gradlew scrubFixture --args="<raw log> <fixture.jsonl.gz>"`; `GoldenReviewTest`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`src/test/java/com/yamareviewer/tools/FixtureScrubberTest.java`:
+
+```java
+package com.yamareviewer.tools;
+
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.AnimationObserved;
+import com.yamareviewer.domain.event.DomainEvent;
+import com.yamareviewer.domain.event.FightStarted;
+import com.yamareviewer.domain.event.HitsplatKind;
+import com.yamareviewer.domain.event.HitsplatObserved;
+import com.yamareviewer.domain.event.PlayerLeft;
+import com.yamareviewer.domain.event.PlayerSeen;
+import com.yamareviewer.domain.event.Position;
+import com.yamareviewer.domain.event.ProjectileObserved;
+import com.yamareviewer.domain.event.TickState;
+import com.yamareviewer.domain.model.KillHeader;
+import com.yamareviewer.domain.model.KillLog;
+import java.util.List;
+import java.util.Set;
+import static org.junit.Assert.assertEquals;
+import org.junit.Test;
+
+public class FixtureScrubberTest
+{
+	@Test
+	public void namesAreReplacedAndOtherActorsDropped()
+	{
+		Position here = new Position(3200, 3200, 0);
+		KillHeader header = new KillHeader("k", 1L, 2L, "0.1.0", KillLog.SCHEMA_VERSION, "f00d", true);
+		KillLog log = KillLog.of(header, List.of(
+			new FightStarted(0, "Stefan", here),
+			new PlayerSeen(0, "Buddy"),
+			new PlayerSeen(3, "Stranger"),
+			new AnimationObserved(4, Actor.other("Stranger"), 808),
+			new HitsplatObserved(5, Actor.SELF, HitsplatKind.DAMAGE, 3, 1, false),
+			new ProjectileObserved(6, 77, Actor.other("Stranger"), 8),
+			new TickState(6, Set.of(), 99, 99, 100, 100, -1, Actor.other("Stranger"), here, null),
+			new PlayerLeft(7, "Buddy")), 2);
+
+		KillLog scrubbed = FixtureScrubber.scrub(log);
+
+		List<DomainEvent> events = scrubbed.getEvents();
+		assertEquals(List.of(
+			new FightStarted(0, "Self", here),
+			new PlayerSeen(0, "Partner"),
+			new PlayerSeen(3, "Other-1"),
+			new HitsplatObserved(5, Actor.SELF, HitsplatKind.DAMAGE, 3, 1, false),
+			new TickState(6, Set.of(), 99, 99, 100, 100, -1, null, here, null),
+			new PlayerLeft(7, "Partner")), events);
+		assertEquals(header, scrubbed.getHeader());
+		assertEquals(2, scrubbed.getSkippedEvents());
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/GoldenReviewTest.java`:
+
+```java
+package com.yamareviewer;
+
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.review.HiddenReason;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.review.ReviewStatus;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.tools.RawLogs;
+import com.yamareviewer.tools.Replay;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertTrue;
+import org.junit.Assume;
+import org.junit.Test;
+
+/**
+ * Golden tests (spec 12): every scrubbed logging kill in src/test/resources/fixtures/ must review to the
+ * JSON next to it, which was generated with the replay tool and checked by hand. Skips until fixtures exist.
+ */
+public class GoldenReviewTest
+{
+	static final Path FIXTURES = Paths.get("src", "test", "resources", "fixtures");
+	static final String LOG_SUFFIX = ".jsonl.gz";
+	static final String EXPECTED_SUFFIX = ".review.json";
+
+	@Test
+	public void everyFixtureReviewsToItsExpectedJson() throws IOException
+	{
+		List<Path> logs;
+		try (Stream<Path> files = Files.list(FIXTURES))
+		{
+			logs = files.filter(path -> path.getFileName().toString().endsWith(LOG_SUFFIX)).sorted().collect(Collectors.toList());
+		}
+		Assume.assumeFalse("No golden fixtures yet: do the logging kills (docs/logging-kills.md), then Task 16 steps 7-9", logs.isEmpty());
+
+		for (Path logPath : logs)
+		{
+			String name = logPath.getFileName().toString();
+			Path expectedPath = FIXTURES.resolve(name.substring(0, name.length() - LOG_SUFFIX.length()) + EXPECTED_SUFFIX);
+			assertTrue("Missing " + expectedPath + ": generate it with ./gradlew replay --args=\"" + logPath + " " + expectedPath + "\"",
+				Files.exists(expectedPath));
+
+			KillLog log = RawLogs.read(logPath);
+			KillReview review = Replay.review(log);
+			JsonElement expected = JsonParser.parseString(new String(Files.readAllBytes(expectedPath), StandardCharsets.UTF_8));
+			JsonElement actual = JsonParser.parseString(Replay.json(review));
+
+			assertEquals(name, Replay.GSON.toJson(expected), Replay.GSON.toJson(actual));
+			assertEquals(name + " must be a complete review", ReviewStatus.COMPLETE, review.getStatus());
+			for (Section<?> section : review.allSections())
+			{
+				assertNotEquals(name + " has a section hidden by an error", HiddenReason.ERROR, section.hiddenReason().orElse(null));
+			}
+			assertTrue(name + ": prayer review hidden", review.getPrayerReview().isOk());
+			assertTrue(name + ": tick log hidden", review.getTickLog().isOk());
+			assertTrue(name + ": crash lines hidden", review.getCrashes().isOk());
+			assertTrue(name + ": waves hidden", review.getWaves().isOk());
+			assertTrue(name + ": specs hidden", review.getSpecs().isOk());
+		}
+	}
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `./gradlew test --tests 'com.yamareviewer.tools.FixtureScrubberTest' --tests 'com.yamareviewer.GoldenReviewTest'`
+Expected: FAIL — `cannot find symbol` for `FixtureScrubber`, `RawLogs`, `Replay.review`.
+
+- [ ] **Step 3: Write `RawLogs` and `FixtureScrubber`**
+
+`src/test/java/com/yamareviewer/tools/RawLogs.java`:
+
+```java
+package com.yamareviewer.tools;
+
+import com.google.gson.Gson;
+import com.yamareviewer.adapter.persistence.EventCodec;
+import com.yamareviewer.adapter.persistence.GsonLogRepository;
+import com.yamareviewer.adapter.persistence.InMemoryFileStore;
+import com.yamareviewer.domain.model.KillLog;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+/** Development tools only: read and write one raw log file through the production codec. */
+public final class RawLogs
+{
+	private RawLogs()
+	{
+	}
+
+	/** The file name must end with .jsonl.gz, as the recorder names them. */
+	public static KillLog read(Path path) throws IOException
+	{
+		InMemoryFileStore files = new InMemoryFileStore();
+		files.write("raw/" + path.getFileName(), Files.readAllBytes(path));
+		List<KillLog> logs = new GsonLogRepository(files, new EventCodec(new Gson())).loadAll();
+		if (logs.isEmpty())
+		{
+			throw new IOException("Not a readable raw log of the current schema: " + path);
+		}
+		return logs.get(0);
+	}
+
+	public static void write(KillLog log, Path path) throws IOException
+	{
+		InMemoryFileStore files = new InMemoryFileStore();
+		new GsonLogRepository(files, new EventCodec(new Gson())).save(log);
+		String stored = "raw/" + files.list("raw").get(0);
+		if (path.getParent() != null)
+		{
+			Files.createDirectories(path.getParent());
+		}
+		Files.write(path, files.read(stored));
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/tools/FixtureScrubber.java`:
+
+```java
+package com.yamareviewer.tools;
+
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.ActorKind;
+import com.yamareviewer.domain.event.AnimationObserved;
+import com.yamareviewer.domain.event.DomainEvent;
+import com.yamareviewer.domain.event.FightStarted;
+import com.yamareviewer.domain.event.GraphicObserved;
+import com.yamareviewer.domain.event.HitsplatObserved;
+import com.yamareviewer.domain.event.NpcChangedObserved;
+import com.yamareviewer.domain.event.NpcDespawnObserved;
+import com.yamareviewer.domain.event.NpcSpawnObserved;
+import com.yamareviewer.domain.event.OverheadTextObserved;
+import com.yamareviewer.domain.event.PlayerLeft;
+import com.yamareviewer.domain.event.PlayerSeen;
+import com.yamareviewer.domain.event.ProjectileObserved;
+import com.yamareviewer.domain.event.TickState;
+import com.yamareviewer.domain.model.KillLog;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Development tool: makes a raw log fit to commit as a golden fixture. Player names become "Self",
+ * "Partner" (the first other player seen) and "Other-n"; events about OTHER actors, which no projection
+ * reads, are dropped. Everything else, header included, stays as recorded.
+ */
+public final class FixtureScrubber
+{
+	private FixtureScrubber()
+	{
+	}
+
+	public static void main(String[] args) throws IOException
+	{
+		if (args.length != 2)
+		{
+			System.err.println("Usage: ./gradlew scrubFixture --args=\"<raw log .jsonl.gz> <fixture .jsonl.gz>\"");
+			System.exit(1);
+		}
+		RawLogs.write(scrub(RawLogs.read(Path.of(args[0]))), Path.of(args[1]));
+		System.out.println("Wrote " + args[1]);
+	}
+
+	public static KillLog scrub(KillLog log)
+	{
+		Map<String, String> aliases = new LinkedHashMap<>();
+		List<DomainEvent> events = new ArrayList<>();
+		for (DomainEvent event : log.getEvents())
+		{
+			if (event instanceof FightStarted)
+			{
+				FightStarted e = (FightStarted) event;
+				events.add(new FightStarted(e.getTick(), "Self", e.getSelfPosition()));
+			}
+			else if (event instanceof PlayerSeen)
+			{
+				PlayerSeen e = (PlayerSeen) event;
+				events.add(new PlayerSeen(e.getTick(), alias(aliases, e.getName())));
+			}
+			else if (event instanceof PlayerLeft)
+			{
+				PlayerLeft e = (PlayerLeft) event;
+				events.add(new PlayerLeft(e.getTick(), alias(aliases, e.getName())));
+			}
+			else if (event instanceof TickState && isOther(((TickState) event).getYamaTarget()))
+			{
+				TickState e = (TickState) event;
+				events.add(new TickState(e.getTick(), e.getPrayers(), e.getHitpoints(), e.getPrayerPoints(), e.getSpecEnergy(),
+					e.getRunEnergy(), e.getWeaponId(), null, e.getSelfPosition(), e.getPartnerPosition()));
+			}
+			else if (!isOther(actorOf(event)))
+			{
+				events.add(event);
+			}
+		}
+		return KillLog.of(log.getHeader(), events, log.getSkippedEvents());
+	}
+
+	private static String alias(Map<String, String> aliases, String name)
+	{
+		return aliases.computeIfAbsent(name, key -> aliases.isEmpty() ? "Partner" : "Other-" + aliases.size());
+	}
+
+	private static boolean isOther(Actor actor)
+	{
+		return actor != null && actor.getKind() == ActorKind.OTHER;
+	}
+
+	/** The actor an event is about, or null for events without one. */
+	private static Actor actorOf(DomainEvent event)
+	{
+		if (event instanceof AnimationObserved)
+		{
+			return ((AnimationObserved) event).getActor();
+		}
+		if (event instanceof GraphicObserved)
+		{
+			return ((GraphicObserved) event).getActor();
+		}
+		if (event instanceof HitsplatObserved)
+		{
+			return ((HitsplatObserved) event).getTarget();
+		}
+		if (event instanceof OverheadTextObserved)
+		{
+			return ((OverheadTextObserved) event).getActor();
+		}
+		if (event instanceof NpcSpawnObserved)
+		{
+			return ((NpcSpawnObserved) event).getActor();
+		}
+		if (event instanceof NpcDespawnObserved)
+		{
+			return ((NpcDespawnObserved) event).getActor();
+		}
+		if (event instanceof NpcChangedObserved)
+		{
+			return ((NpcChangedObserved) event).getActor();
+		}
+		if (event instanceof ProjectileObserved)
+		{
+			return ((ProjectileObserved) event).getTarget();
+		}
+		return null;
+	}
+}
+```
+
+- [ ] **Step 4: Replace `Replay`**
+
+`src/test/java/com/yamareviewer/tools/Replay.java`:
+
+```java
+package com.yamareviewer.tools;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.yamareviewer.adapter.ids.BuiltInIds;
+import com.yamareviewer.domain.ids.Rules;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.projection.KillReviewAssembler;
+import com.yamareviewer.domain.projection.ProjectionContext;
+import com.yamareviewer.domain.projection.Projections;
+import com.yamareviewer.domain.projection.ReviewBuilder;
+import com.yamareviewer.domain.projection.ReviewSettings;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.text.ReviewFormatter;
+import com.yamareviewer.domain.text.ReviewView;
+import com.yamareviewer.domain.text.ViewSection;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+/**
+ * Development tool: prints the review of a raw log with the built-in IDs and default rules, and with a
+ * second argument writes the review JSON that the golden test compares against.
+ */
+public final class Replay
+{
+	public static final Gson GSON = new GsonBuilder().serializeNulls().setPrettyPrinting().create();
+
+	private Replay()
+	{
+	}
+
+	public static void main(String[] args) throws IOException
+	{
+		if (args.length < 1 || args.length > 2)
+		{
+			System.err.println("Usage: ./gradlew replay --args=\"<raw log .jsonl.gz> [<expected .review.json>]\"");
+			System.exit(1);
+		}
+		KillReview review = review(RawLogs.read(Path.of(args[0])));
+		print(ReviewFormatter.format(review));
+		if (args.length == 2)
+		{
+			Files.write(Path.of(args[1]), json(review).getBytes(StandardCharsets.UTF_8));
+			System.out.println("Wrote " + args[1]);
+		}
+	}
+
+	/** Exactly what the plugin computes for this log, without health checks (Part 4 adds those). */
+	public static KillReview review(KillLog log)
+	{
+		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), BuiltInIds.registry(), Rules.DEFAULT);
+		ProjectionContext context = builder.run(log, ReviewSettings.DEFAULT);
+		return KillReviewAssembler.assemble(log, context);
+	}
+
+	public static String json(KillReview review)
+	{
+		return GSON.toJson(review);
+	}
+
+	private static void print(ReviewView view)
+	{
+		System.out.println(view.getHeadline());
+		System.out.println(view.getStatus());
+		for (ViewSection section : view.getSections())
+		{
+			System.out.println();
+			System.out.println("== " + section.getTitle());
+			if (section.getHiddenReason() != null)
+			{
+				System.out.println(section.getHiddenReason());
+			}
+			for (String line : section.getLines())
+			{
+				System.out.println(line);
+			}
+		}
+	}
+}
+```
+
+- [ ] **Step 5: Add the Gradle task and the fixtures directory**
+
+Append to `build.gradle` (next to Part 2's `replay` task):
+
+```groovy
+tasks.register('scrubFixture', JavaExec) {
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.yamareviewer.tools.FixtureScrubber'
+}
+```
+
+Create the empty file `src/test/resources/fixtures/.gitkeep`.
+
+- [ ] **Step 6: Run the tests to verify the scrubber passes and the golden test skips**
+
+Run: `./gradlew test --tests 'com.yamareviewer.tools.FixtureScrubberTest' --tests 'com.yamareviewer.GoldenReviewTest'`
+Expected: `FixtureScrubberTest` PASS (1 test); `GoldenReviewTest` reported as skipped (an `AssumptionViolatedException` with "No golden fixtures yet"). Then commit the code:
+
+```bash
+git add build.gradle src/test/java/com/yamareviewer/tools src/test/java/com/yamareviewer/GoldenReviewTest.java src/test/resources/fixtures/.gitkeep
+git commit -m "test: add the golden review test and the fixture tools"
+```
+
+- [ ] **Step 7 (user, after the logging kills): correct the IDs, then scrub the five logs into fixtures**
+
+Preconditions from `docs/logging-kills.md`, "Afterwards": `BuiltInIds` corrected from the capture summaries (`CRASH_FIREBALL` and `SPEC_PURGING_STAFF` filled in; `Rules.DEFAULT.prayerCheck` set from kill 2), committed before this step. Then, for each of the five raw logs (paths from `~/.runelite/plugin-data/yama-reviewer/raw/` or wherever they were copied):
+
+```bash
+./gradlew scrubFixture --args="<raw log of kill 1> src/test/resources/fixtures/solo-clean.jsonl.gz"
+./gradlew scrubFixture --args="<raw log of kill 2> src/test/resources/fixtures/solo-mistakes.jsonl.gz"
+./gradlew scrubFixture --args="<raw log of kill 3> src/test/resources/fixtures/duo-host.jsonl.gz"
+./gradlew scrubFixture --args="<raw log of kill 4> src/test/resources/fixtures/duo-joiner.jsonl.gz"
+./gradlew scrubFixture --args="<raw log of kill 5> src/test/resources/fixtures/contract-<short name, lower case>.jsonl.gz"
+```
+
+Check one with `zcat src/test/resources/fixtures/solo-clean.jsonl.gz | grep -c '"name"'`: only `Self`, `Partner` and `Other-n` names may appear.
+
+- [ ] **Step 8 (user): generate each expectation and review it by hand**
+
+```bash
+for f in src/test/resources/fixtures/*.jsonl.gz; do ./gradlew replay --args="$f ${f%.jsonl.gz}.review.json"; done
+```
+
+Read the printed review of every kill against what was done deliberately (the table in `docs/logging-kills.md`) and against the raw log (`./gradlew captureSummary --args="$f"`). Do not accept a fixture until every line below is true; when one is false, fix the projection or `BuiltInIds` (never the JSON), regenerate, and read again.
+
+- Kill 1 (`solo-clean`): status COMPLETE; opener shows a glyph majority and Yama's first P3 attack; "P3 prayers" lists every P3 attack with `blocked`; the tick log's number of entries equals the count of `YAMA_STANDARD_ATTACK` animations in P3 from `captureSummary`, and the share of 7-tick gaps is what the log shows; "Specs and drains" lists every weapon used with the right landed/used counts, the purging staff spec targets a flare, and the Defence line follows the pinned drain numbers for the weapons used.
+- Kill 2 (`solo-mistakes`): the deliberate mistakes appear and nothing else: one `too early` or one `late` (whichever `prayerCheck` was set to makes the two deliberate switches one blocked and one mistake), one `lost alternation` (the wrong style), exactly one crash line `hit` with its damage, exactly one wave `hit`, melee damage in the damage section, a flare explosion in the flares section. If a wave disabled your prayers, that attack shows `prayers disabled` and is not a mistake.
+- Kill 3 (`duo-host`) and kill 4 (`duo-joiner`): mode is right; "P3 prayers" contains only the attacks aimed at you (compare with the `IMPACT_*` graphics on `SELF` in `captureSummary`); crash lines and waves show a `Partner:` line; partner specs appear with `energyUsed` 0.
+- Kill 5 (`contract-…`): the contract is named; the specs section starts from Defence 247 and Magic 275; under Shard Acquisition the opener is "Not meaningful under this contract" and the prayer label is `wrong prayer`; under an acquisition contract crash lines appear in P1 and P2 too.
+- Every kill: no section hidden for `ERROR`; `IDS_NOT_CAPTURED` only for roles still listed as uncaptured in `BuiltInIds` (`JUDGE_FIRE_SURGE`, `SHADOW_POOL`).
+
+- [ ] **Step 9 (user): run the golden test and commit the fixtures**
+
+Run: `./gradlew test --tests 'com.yamareviewer.GoldenReviewTest'`
+Expected: PASS (1 test, no longer skipped). Then:
+
+```bash
+git add src/test/resources/fixtures
+git commit -m "test: add the golden fixtures from the logging kills"
+```
+
+From now on any change to a projection, `BuiltInIds` or `Rules.DEFAULT` that alters a review fails this test; regenerate an expectation only after re-reading it with the checklist of step 8.
+
+---
+
+## Self-Review
+
+**Spec coverage (spec 13, part 3):**
+
+- 6.4 Attacks: detection, style from cast then impact, target from impact then TickState, global alternation expectation — Task 6 (`AttacksProjection`, `AttackTimeline.expectedStyle`). Behaviour evidence (negative only) is consumed by Part 4's `GraphicVsBehaviour` check, which reads `Attack.damage` and the TickState prayers; nothing to compute here.
+- 6.5 Prayer review: check tick with `prayerCheck` and `prayerCheckOffset`, the six rules in order, switch timing, only attacks aimed at SELF, Shard label, Divine Severance note — Tasks 7, 8. Opener — Task 9. Tick log with annotations and the share of 7-tick gaps, no advice — Task 10.
+- 6.6 Shadow Crash lines, nearest player, sets by `crashSetGap`, hit by `CRASH_IMPACT` or a non-standard hitsplat within `crashImpactWindow` — Task 11. Lines are reviewed in every phase, so the acquisition contracts need no switch; the five-set expectation is Part 4's `CrashSets` check.
+- 6.7 Shadow Waves, hits, `PRAYER_DISABLED_MESSAGE` — Task 12 (and rule 0 in Task 7).
+- 6.9 Specs: own spec by energy drop plus animation, OTHER_WEAPON, purging staff by animation, partner specs, result within `specResultWindow`, soulflame horn within 10 ticks and the unused flag, SGS restores, Familiar specs always hit — Task 13. DrainModel with contract base 247/275, normal-form limits, floor 145, restore every `statRestoreTicks`, Eye of Ayak bonus, all pinned numbers — Task 1. Spec efficiency figures (landed per weapon, Defence drained out of the maximum and the phase, energy per Defence point, damage per spec, bonus drained) — Task 15 (`P3Text.specLines`).
+- 6.10 rules 1, 3, 4 — Task 14. 6.1 order — Task 14.
+- 7.2 lines 2 and 4, 7.3 sections and hidden-reason lines, 7.4 spec efficiency in the clipboard, history averages and trends for P3 accuracy and Defence drained — Task 15; `KillSummary.specLandedShare` filled for the spec-efficiency trend.
+- 12 golden tests from the logging kills, with the scrubber so no player name is committed — Task 16.
+- Gaps, deliberately: `GLYPH_CONJURE_MESSAGE` is not used to count glyphs (its colour tags are unconfirmed; the objects are counted instead, and the golden test of kill 1 decides whether the message is needed). `Attack` has no "expected style" field so that Part 4 can construct it with the six binding fields; the expectation lives in `AttackTimeline.expectedStyle(index)`.
+
+**Placeholder scan:** every step carries its code; every command is exact; the only work left to a person is the in-game part of Task 16, which the task says so at its top.
+
+**Type consistency:** `Attack(castTick, phase, style, target, landingTick, damage)`, `AttackResult(attack, checkTick, outcome, switchTicks)`, `PrayerReview(results, unscored, lostAlternationLabel, notes)`, `Opener(glyphs, expectedStyle, firstAttack, asExpected, firstOwnResult)`, `TickLogEntry(tick, style, target, gap, annotations)`, `TickLog(entries, cycle)`, `CrashLine(tick, phase, player, set, indexInSet, centre, hit, damage)`, `WaveHit(tick, phase, player, hit, damage, prayersDisabled)`, `SpecResult(tick, phase, user, weapon, animationSeen, target, outcome, damage, energyUsed, hpRestored, prayerRestored)`, `HornUse(tick, user, assistedSpec)`, `DrainStep(tick, phase, cause, before, after)`, `SpecSummary(specs, horns, drains, base, finalStats, lowestDefence, lowestDefencePhase)` are constructed identically in Tasks 2, 8–13, 15 and 16. `CrashesProjection.standardLandings`, `isMechanicDamage`, `statesByTick`, `distance` are package-private statics used by Tasks 12 and 14 in the same package. `PrayerReviewProjection.checkTick(Attack, Rules)` is package-private for Part 4. `P3Text` method names match Task 15's modifications of the Part 2 classes.
+
+**Review Focus:** items 1–5 are pinned by `AttacksProjectionTest.styleStaysNullWithoutCastOrImpact`, `PrayerReviewProjectionTest.attacksWithUnknownStyleAreNotScored`, `partnerAttacksAreNotScoredButSetTheSwitchOrigin`, `checkTickPastTheEndOfTheLogScoresNoPrayer`, `hitsplatCheckUsesTheLandingTickAndFallsBackToTheCastTick`, `SpecsProjectionTest.otherWeaponDropIsRecordedWithoutDrain`, `knownWeaponWithoutAnimationIsRecordedUnmatched`, `CrashesProjectionTest.twoLinesOnOneTickBelongToDifferentPlayers`, `soloLinesAlwaysBelongToYou`. Hidden-reason propagation, the sixth candidate, is pinned in every projection test's `hidden…WithTheSameReason` case.
