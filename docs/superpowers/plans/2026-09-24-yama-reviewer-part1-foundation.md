@@ -2,35 +2,37 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A RuneLite plugin that silently records every Yama kill as an append-only event stream on disk (plus an uncompressed capture file in capture mode), so the user can do the four logging kills that later parts depend on.
+**Goal:** A RuneLite plugin that silently records every Yama kill as an append-only event stream on disk, so the user can do the logging kills that later parts are confirmed against.
 
-**Architecture:** Hexagonal layers under `com.yamareviewer`: `domain` (pure value objects, events, ID registry), `application` (the `KillSession` write side, ports, the kill-ended handler), `adapter` (RuneLite recording, Gson/Filepath persistence) and the root-package plugin class as the composition root. During a fight only raw observations are appended; nothing is classified or displayed. When the kill ends the frozen `KillLog` is saved off the client thread.
+**Architecture:** Hexagonal layers under `com.yamareviewer`: `domain` (events, value objects, ID registry, tunables), `application` (the `KillSession` write side, ports, the kill-ended handler), `adapter` (`gameval` IDs, RuneLite recording, `Filepath` persistence) and a thin root-package plugin class that only wires objects. `GameEventListener` is the only class that receives RuneLite game events. During a fight only raw observations are appended; when the kill ends, the frozen `KillLog` is saved on the plugin's own executor.
 
 **Tech Stack:** Java 11 (release target), Gradle from the RuneLite example-plugin template, RuneLite client API (`latest.release`), Lombok, Gson (RuneLite's injected instance), JUnit 4.12, Mockito 5, ArchUnit 1.3.
 
-**Spec:** `docs/superpowers/specs/2026-09-24-yama-reviewer-design.md` (sections 2, 4, 5, 13 part 1). Executors read the spec and this plan.
+**Spec:** `docs/superpowers/specs/2026-09-24-yama-reviewer-design.md`, sections 2, 4, 5, 12 and 13 (part 1).
 
 ## Global Constraints
 
-- Build must match the RuneLite example-plugin template structure; `options.release.set(11)`.
+- Build matches the RuneLite example-plugin template; `options.release.set(11)`.
 - Root package `com.yamareviewer`; `@PluginDescriptor(internalName = "yama-reviewer")`; config group `yamareviewer`.
-- Nothing is drawn, printed or played during a fight. No `Overlay`, `InfoBox`, `Notifier`, sounds or chat messages in Part 1 at all.
+- Nothing is drawn, printed or played during a fight. Part 1 has no overlay, panel, chat message, notification or sound at all.
 - Record only inside region 6045 (role `YAMAS_DOMAIN`).
-- All file I/O through RuneLite's `Filepath` via `Plugin.getPluginDirectory()`; never `java.io.File`/`Files` in main code; never `Filepath.Unchecked` anywhere.
-- Use the injected `Gson` (`@Inject Gson`), never `new Gson()` in main code (tests may).
+- All file I/O through RuneLite's `Filepath` via `Plugin.getPluginDirectory()`; never `java.io.File` or `java.nio.file.Files` in main code; `Filepath.Unchecked` only in tests.
+- Use the injected `Gson` in main code; tests may use `new Gson()`.
 - No reflection in main code. `log.debug` for per-event logging.
-- `domain` imports nothing from `application`, `adapter`, `net.runelite`, `com.google.gson`, `javax.swing`. `application` imports nothing from `adapter`, `net.runelite`, `com.google.gson`, `javax.swing`.
-- No numeric game IDs in main code outside `src/main/resources/com/yamareviewer/ids.json`.
+- `domain` imports nothing from `application`, `adapter`, `net.runelite`, `com.google`, Swing or AWT. `application` imports nothing from `adapter`, `net.runelite`, `com.google`, Swing or AWT.
+- Only `adapter.recording` imports `net.runelite.api.events` or declares `@Subscribe` methods.
+- Yama-specific game IDs appear only in `adapter.ids.BuiltInIds`, as `gameval` constants (region 6045 and overhead texts are literals there). General client state (prayer varbits, inventory containers, spec energy, rune pouch) uses `gameval` constants where it is read.
+- Event type names in the log (`EventType`) never change once released.
 - RuneLite code style: tabs, braces on their own line.
-- Building needs network access to `https://repo.runelite.net` and Maven Central. Run the commands on a machine that has it.
+- Building needs network access to `https://repo.runelite.net` and Maven Central.
 
 ## Review Focus
 
-1. Logging out, hopping or disabling the plugin mid-fight must keep the kill as `LEFT` without inventing an END snapshot from an empty inventory (KillSessionTest `leavingMidFight…`, `endSnapshotIsSkippedWhenUnavailable`; SnapshotReaderTest `notLoggedIn…`).
-2. A second kill in the same instance after Yama dies must get a fresh kill id and tick counter (KillSessionTest `secondKillInSameInstance…`).
-3. Yama's `NpcSpawned` firing again while fighting (scene reload) must not restart the kill; a duo partner who loads in after Yama appeared must still become the partner (KillSessionTest `spawnWhileFightingIsIgnored`, `partnerSeenMidFightBecomesPartner`).
-4. Corrupt or foreign files in `raw/` must be skipped and renamed while the others still load (GsonLogRepositoryTest `corruptFileIsRenamedAndSkipped`).
-5. A raw log written by a newer plugin version with unknown event types must still load, with the skip counted (GsonLogRepositoryTest `unknownEventTypesAreCountedNotFatal`).
+1. Logging out, hopping or disabling the plugin mid-fight ends the kill as `LEFT` at once, without an END snapshot from an empty inventory (KillSessionTest `leavingMidFight…`, `endSnapshotIsSkippedWhenUnavailable`; GameEventListenerTest `loggingOutEndsTheFightAsLeft`; SnapshotReaderTest `notLoggedInGivesNoSnapshot`).
+2. A death is completed on the next tick so the death tick's `TickState` is in the log, and a logout right after a death keeps the death as the reason (KillSessionTest `deathKeepsTheDeathTicksState`, `leaveAfterDeathKeepsTheDeathReason`; GameEventListenerTest `deathEndsOnTheNextTick…`).
+3. Yama despawning on a scene reload is not a kill, and his spawn repeating while fighting doesn't restart it (GameEventListenerTest `yamaDespawningOnASceneReloadIsNotAKill`; KillSessionTest `spawnWhileFightingIsIgnored`).
+4. A duo partner who loads in after Yama appeared still becomes the partner; the local player never does (GameEventListenerTest `aPartnerLoadingInLateIsSeen`, `theLocalPlayerIsNeverAPartner`).
+5. Corrupt files and logs of another schema version in `raw/` are skipped while the others load (GsonLogRepositoryTest `corruptFileIsRenamedAndSkipped`, `otherSchemaVersionsAreSkipped`).
 
 ---
 
@@ -39,22 +41,23 @@
 ```
 build.gradle, settings.gradle, runelite-plugin.properties, gradlew, gradlew.bat, gradle/, .gitignore, LICENSE, README.md
 src/main/java/com/yamareviewer/
-  YamaReviewerPlugin.java          composition root: wiring + RuneLite event forwarding only
+  YamaReviewerPlugin.java          composition root: builds objects, registers the listener
   YamaReviewerConfig.java          config (Part 1 keys: rawLogsKept, captureMode)
-  domain/event/                    Actor, ActorKind, Position, enums, ItemStack, DomainEvent + 17 event classes
+  domain/event/                    Actor, value types, DomainEvent, EventType and 24 event classes
   domain/model/                    KillHeader, KillLog
-  domain/ids/                      Role, RoleKind, PrayerCheck, TimingRules, IdRegistry
+  domain/ids/                      Role, RoleKind, PrayerCheck, Rules, IdRegistry
   application/port/                LogRepository, SnapshotSource
   application/command/             KillSession, SessionState, FightStart, KillEndedListener
   application/handler/             KillEndedHandler
-  adapter/persistence/             FileStore, FilepathFileStore, EventCodec, IdsJsonLoader, GsonLogRepository
-  adapter/recording/               ActorResolver, EventTranslator, TickSampler, SnapshotReader
-src/main/resources/com/yamareviewer/ids.json
+  adapter/ids/                     BuiltInIds
+  adapter/persistence/             FileStore, FilepathFileStore, EventCodec, GsonLogRepository
+  adapter/recording/               PositionReader, ActorResolver, EventTranslator, ItemLookup, ItemManagerLookup,
+                                   TickSampler, SnapshotReader, GameEventListener
 src/test/java/com/yamareviewer/
   YamaReviewerPluginTest.java      dev-client launcher (template convention, not a unit test)
   ArchitectureTest.java
   domain/…, application/…, adapter/… tests mirroring main
-  tools/CaptureSummary.java        dev tool for the logging kills
+  tools/CaptureSummary.java, tools/GamevalNames.java
 docs/logging-kills.md
 ```
 
@@ -264,7 +267,7 @@ public interface YamaReviewerConfig extends Config
 	@ConfigItem(
 		keyName = "captureMode",
 		name = "Capture mode",
-		description = "Also write an uncompressed log with every observed ID, for filling ids.json",
+		description = "Also record other actors and every animated object, for confirming IDs after a game update",
 		position = 101,
 		section = development
 	)
@@ -350,13 +353,13 @@ git commit -m "chore: scaffold Yama Reviewer from the RuneLite example plugin"
 ### Task 2: Domain events and the kill log
 
 **Files:**
-- Create in `src/main/java/com/yamareviewer/domain/event/`: `ActorKind.java`, `Actor.java`, `Position.java`, `EntryChoice.java`, `EndReason.java`, `ProtectionPrayer.java`, `HitsplatKind.java`, `SnapshotKind.java`, `ItemStack.java`, `DomainEvent.java`, and the events `EntryChosen`, `FightStarted`, `FightEnded`, `PartnerSeen`, `NpcSpawnObserved`, `NpcDespawnObserved`, `ObjectSpawnObserved`, `OverheadTextObserved`, `ScriptObserved`, `AnimationObserved`, `GraphicObserved`, `GroundGraphicObserved`, `ProjectileObserved`, `HitsplatObserved`, `TickState`, `InventoryDelta`, `SuppliesSnapshot`
+- Create in `src/main/java/com/yamareviewer/domain/event/`: `ActorKind`, `Actor`, `Position`, `EntryChoice`, `EndReason`, `ProtectionPrayer`, `HitsplatKind`, `SnapshotKind`, `GameStateKind`, `SupplyItem`, `DomainEvent`, `EventType`, and the events `EntryChosen`, `FightStarted`, `FightEnded`, `PlayerSeen`, `PlayerLeft`, `GameStateObserved`, `NpcSpawnObserved`, `NpcDespawnObserved`, `NpcChangedObserved`, `ObjectSpawnObserved`, `ObjectDespawnObserved`, `ObjectAnimationObserved`, `OverheadTextObserved`, `GameMessageObserved`, `VarbitObserved`, `WidgetTextObserved`, `AnimationObserved`, `GraphicObserved`, `GroundGraphicObserved`, `ProjectileObserved`, `HitsplatObserved`, `TickState`, `InventoryDelta`, `SuppliesSnapshot`
 - Create: `src/main/java/com/yamareviewer/domain/model/KillHeader.java`, `KillLog.java`
-- Test: `src/test/java/com/yamareviewer/domain/event/ActorTest.java`, `src/test/java/com/yamareviewer/domain/model/KillLogTest.java`
+- Test: `src/test/java/com/yamareviewer/domain/event/ActorTest.java`, `DomainEventsTest.java`, `src/test/java/com/yamareviewer/domain/model/KillLogTest.java`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: every type listed above with Lombok `@Value` getters (`getTick()`, `getActor()`, …); `Actor.SELF/PARTNER/YAMA/JUDGE`, `Actor.flare(int)`, `Actor.npc(int)`, `Actor.other(String)`, `Actor.isPlayer()`; `KillLog.of(KillHeader, List<? extends DomainEvent>, int)`, `KillLog.eventsOf(Class<T>)`, `KillLog.endReason()`, `KillLog.lastTick()`, `KillLog.SCHEMA_VERSION = 1`.
+- Produces: the types above with Lombok `@Value` getters; `Actor.SELF/PARTNER/YAMA/JUDGE`, `Actor.flare(int)`, `Actor.npc(int)`, `Actor.other(String)`, `Actor.isPlayer()`; `EventType.of(DomainEvent)`, `EventType.byName(String)`, `typeName()`, `eventClass()`; `KillHeader(String killId, long startEpochMs, long endEpochMs, String pluginVersion, int schemaVersion, String idsFingerprint, boolean capture)`; `KillLog.of(KillHeader, List<? extends DomainEvent>, int skippedEvents)`, `eventsOf(Class<T>)`, `endReason()`, `lastTick()`, `KillLog.SCHEMA_VERSION = 1`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -398,6 +401,58 @@ public class ActorTest
 }
 ```
 
+`src/test/java/com/yamareviewer/domain/event/DomainEventsTest.java`:
+
+```java
+package com.yamareviewer.domain.event;
+
+import com.tngtech.archunit.core.domain.JavaClass;
+import com.tngtech.archunit.core.importer.ClassFileImporter;
+import java.util.Arrays;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import org.junit.Test;
+
+public class DomainEventsTest
+{
+	@Test
+	public void typeNamesAreUnique()
+	{
+		long distinct = Arrays.stream(EventType.values()).map(EventType::typeName).distinct().count();
+		assertEquals(EventType.values().length, distinct);
+	}
+
+	@Test
+	public void everyEventClassHasAType()
+	{
+		Set<String> eventClasses = new ClassFileImporter().importPackages("com.yamareviewer.domain.event").stream()
+			.filter(c -> c.isAssignableTo(DomainEvent.class) && !c.isInterface())
+			.map(JavaClass::getName)
+			.collect(Collectors.toSet());
+		Set<String> typed = Arrays.stream(EventType.values()).map(t -> t.eventClass().getName()).collect(Collectors.toSet());
+		assertEquals(eventClasses, typed);
+	}
+
+	@Test
+	public void typesResolveBothWays()
+	{
+		assertEquals(EventType.HITSPLAT, EventType.of(new HitsplatObserved(1, Actor.SELF, HitsplatKind.DAMAGE, 5, 1, false)));
+		assertEquals(Optional.of(EventType.TICK), EventType.byName("tick"));
+		assertEquals(Optional.empty(), EventType.byName("from-the-future"));
+	}
+
+	@Test
+	public void missingCollectionsReadAsEmpty()
+	{
+		assertTrue(new TickState(1, null, 99, 99, 100, 100, -1, null, null, null).getPrayers().isEmpty());
+		assertTrue(new SuppliesSnapshot(1, SnapshotKind.START, null).getItems().isEmpty());
+	}
+}
+```
+
 `src/test/java/com/yamareviewer/domain/model/KillLogTest.java`:
 
 ```java
@@ -407,11 +462,10 @@ import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.event.AnimationObserved;
 import com.yamareviewer.domain.event.DomainEvent;
 import com.yamareviewer.domain.event.EndReason;
-import com.yamareviewer.domain.event.EntryChoice;
 import com.yamareviewer.domain.event.FightEnded;
 import com.yamareviewer.domain.event.HitsplatKind;
 import com.yamareviewer.domain.event.HitsplatObserved;
-import com.yamareviewer.domain.event.ScriptObserved;
+import com.yamareviewer.domain.event.VarbitObserved;
 import java.util.ArrayList;
 import java.util.List;
 import static org.junit.Assert.assertEquals;
@@ -422,7 +476,7 @@ public class KillLogTest
 {
 	private static KillHeader header()
 	{
-		return new KillHeader("kill-1", 1_000L, 2_000L, "0.1.0", KillLog.SCHEMA_VERSION, 1, EntryChoice.TRAVEL, null, false);
+		return new KillHeader("kill-1", 1_000L, 2_000L, "0.1.0", KillLog.SCHEMA_VERSION, "f00d", false);
 	}
 
 	@Test
@@ -460,9 +514,9 @@ public class KillLogTest
 	@Test(expected = UnsupportedOperationException.class)
 	public void eventsCannotBeModified()
 	{
-		KillLog log = KillLog.of(header(), List.of(new ScriptObserved(0, 1)), 0);
+		KillLog log = KillLog.of(header(), List.of(new VarbitObserved(0, 1, 1)), 0);
 
-		log.getEvents().add(new ScriptObserved(1, 1));
+		log.getEvents().add(new VarbitObserved(1, 1, 2));
 	}
 
 	@Test
@@ -471,7 +525,7 @@ public class KillLogTest
 		List<DomainEvent> source = new ArrayList<>();
 		KillLog log = KillLog.of(header(), source, 0);
 
-		source.add(new ScriptObserved(1, 1));
+		source.add(new VarbitObserved(1, 1, 1));
 
 		assertTrue(log.getEvents().isEmpty());
 	}
@@ -481,7 +535,7 @@ public class KillLogTest
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `./gradlew test --tests 'com.yamareviewer.domain.*'`
-Expected: FAIL — compilation errors, `cannot find symbol` for `Actor`, `KillLog` and the event classes.
+Expected: FAIL — compilation errors, `cannot find symbol` for `Actor`, `EventType`, `KillLog`.
 
 - [ ] **Step 3: Write the value types**
 
@@ -555,7 +609,7 @@ package com.yamareviewer.domain.event;
 
 import lombok.Value;
 
-/** A world position; inside the instance it is the template (real-world) coordinate. */
+/** A template (real-world) coordinate, also inside the instance. */
 @Value
 public class Position
 {
@@ -565,7 +619,7 @@ public class Position
 }
 ```
 
-`EntryChoice.java`, `EndReason.java`, `ProtectionPrayer.java`, `HitsplatKind.java`, `SnapshotKind.java`:
+The enums, one file each:
 
 ```java
 package com.yamareviewer.domain.event;
@@ -573,8 +627,7 @@ package com.yamareviewer.domain.event;
 public enum EntryChoice
 {
 	TRAVEL,
-	JOIN,
-	UNKNOWN
+	JOIN
 }
 ```
 
@@ -622,23 +675,40 @@ public enum SnapshotKind
 }
 ```
 
-`ItemStack.java`:
+```java
+package com.yamareviewer.domain.event;
+
+public enum GameStateKind
+{
+	LOADING,
+	LOGGED_IN,
+	HOPPING,
+	LOGIN_SCREEN,
+	CONNECTION_LOST,
+	OTHER
+}
+```
+
+`SupplyItem.java`:
 
 ```java
 package com.yamareviewer.domain.event;
 
 import lombok.Value;
 
+/** One item line of a supplies snapshot, priced when the snapshot was taken. */
 @Value
-public class ItemStack
+public class SupplyItem
 {
 	int itemId;
 	String name;
 	int quantity;
+	int gePrice;
+	int haPrice;
 }
 ```
 
-- [ ] **Step 4: Write `DomainEvent` and the events**
+- [ ] **Step 4: Write `DomainEvent`, the events and `EventType`**
 
 `DomainEvent.java`:
 
@@ -675,7 +745,6 @@ public class EntryChosen implements DomainEvent
 ```java
 package com.yamareviewer.domain.event;
 
-import java.util.List;
 import lombok.Value;
 
 @Value
@@ -683,7 +752,6 @@ public class FightStarted implements DomainEvent
 {
 	int tick;
 	String selfName;
-	List<String> otherPlayers;
 	Position selfPosition;
 }
 ```
@@ -706,12 +774,38 @@ package com.yamareviewer.domain.event;
 
 import lombok.Value;
 
-/** Another player appeared in the arena after the fight had started (a duo partner loading in late). */
+/** Another player is in the arena (present at fight start, or loaded in later). */
 @Value
-public class PartnerSeen implements DomainEvent
+public class PlayerSeen implements DomainEvent
 {
 	int tick;
 	String name;
+}
+```
+
+```java
+package com.yamareviewer.domain.event;
+
+import lombok.Value;
+
+@Value
+public class PlayerLeft implements DomainEvent
+{
+	int tick;
+	String name;
+}
+```
+
+```java
+package com.yamareviewer.domain.event;
+
+import lombok.Value;
+
+@Value
+public class GameStateObserved implements DomainEvent
+{
+	int tick;
+	GameStateKind state;
 }
 ```
 
@@ -742,6 +836,23 @@ public class NpcDespawnObserved implements DomainEvent
 	Actor actor;
 	int npcId;
 	int npcIndex;
+	/** RuneLite's NpcUtil.isDying at despawn; false for a scene reload. */
+	boolean dying;
+}
+```
+
+```java
+package com.yamareviewer.domain.event;
+
+import lombok.Value;
+
+@Value
+public class NpcChangedObserved implements DomainEvent
+{
+	int tick;
+	Actor actor;
+	int oldId;
+	int newId;
 }
 ```
 
@@ -765,6 +876,35 @@ package com.yamareviewer.domain.event;
 import lombok.Value;
 
 @Value
+public class ObjectDespawnObserved implements DomainEvent
+{
+	int tick;
+	int objectId;
+	Position position;
+}
+```
+
+```java
+package com.yamareviewer.domain.event;
+
+import lombok.Value;
+
+@Value
+public class ObjectAnimationObserved implements DomainEvent
+{
+	int tick;
+	int objectId;
+	Position position;
+	int animationId;
+}
+```
+
+```java
+package com.yamareviewer.domain.event;
+
+import lombok.Value;
+
+@Value
 public class OverheadTextObserved implements DomainEvent
 {
 	int tick;
@@ -778,11 +918,40 @@ package com.yamareviewer.domain.event;
 
 import lombok.Value;
 
+/** A system message (ChatMessageType.GAMEMESSAGE), colour tags kept: they carry meaning (shadow or fire). */
 @Value
-public class ScriptObserved implements DomainEvent
+public class GameMessageObserved implements DomainEvent
 {
 	int tick;
-	int scriptId;
+	String text;
+}
+```
+
+```java
+package com.yamareviewer.domain.event;
+
+import lombok.Value;
+
+@Value
+public class VarbitObserved implements DomainEvent
+{
+	int tick;
+	int varbitId;
+	int value;
+}
+```
+
+```java
+package com.yamareviewer.domain.event;
+
+import lombok.Value;
+
+@Value
+public class WidgetTextObserved implements DomainEvent
+{
+	int tick;
+	int componentId;
+	String text;
 }
 ```
 
@@ -868,7 +1037,7 @@ package com.yamareviewer.domain.event;
 import java.util.Set;
 import lombok.Value;
 
-/** State at the end of a tick, recorded after every other event of that tick. */
+/** State at the end of a tick; recorded on GameTick, after every other event of that tick. */
 @Value
 public class TickState implements DomainEvent
 {
@@ -876,7 +1045,10 @@ public class TickState implements DomainEvent
 	Set<ProtectionPrayer> prayers;
 	int hitpoints;
 	int prayerPoints;
+	/** Percent, 0-100. */
 	int specEnergy;
+	/** Percent, 0-100. */
+	int runEnergy;
 	/** -1 when nothing is wielded. */
 	int weaponId;
 	/** Null when Yama targets nobody. */
@@ -884,6 +1056,11 @@ public class TickState implements DomainEvent
 	Position selfPosition;
 	/** Null in solo or when the partner is not visible. */
 	Position partnerPosition;
+
+	public Set<ProtectionPrayer> getPrayers()
+	{
+		return prayers == null ? Set.of() : prayers;
+	}
 }
 ```
 
@@ -914,7 +1091,92 @@ public class SuppliesSnapshot implements DomainEvent
 	int tick;
 	SnapshotKind kind;
 	/** Inventory plus rune pouch contents, aggregated per item id. */
-	List<ItemStack> items;
+	List<SupplyItem> items;
+
+	public List<SupplyItem> getItems()
+	{
+		return items == null ? List.of() : items;
+	}
+}
+```
+
+`EventType.java`:
+
+```java
+package com.yamareviewer.domain.event;
+
+import java.util.Optional;
+
+/** The stable name written into logs for each event class. Never rename a released type name. */
+public enum EventType
+{
+	ENTRY("entry", EntryChosen.class),
+	FIGHT_START("fight-start", FightStarted.class),
+	FIGHT_END("fight-end", FightEnded.class),
+	PLAYER_SEEN("player-seen", PlayerSeen.class),
+	PLAYER_LEFT("player-left", PlayerLeft.class),
+	GAME_STATE("game-state", GameStateObserved.class),
+	NPC_SPAWN("npc-spawn", NpcSpawnObserved.class),
+	NPC_DESPAWN("npc-despawn", NpcDespawnObserved.class),
+	NPC_CHANGED("npc-changed", NpcChangedObserved.class),
+	OBJECT_SPAWN("object-spawn", ObjectSpawnObserved.class),
+	OBJECT_DESPAWN("object-despawn", ObjectDespawnObserved.class),
+	OBJECT_ANIMATION("object-animation", ObjectAnimationObserved.class),
+	OVERHEAD("overhead", OverheadTextObserved.class),
+	GAME_MESSAGE("game-message", GameMessageObserved.class),
+	VARBIT("varbit", VarbitObserved.class),
+	WIDGET_TEXT("widget-text", WidgetTextObserved.class),
+	ANIMATION("animation", AnimationObserved.class),
+	GRAPHIC("graphic", GraphicObserved.class),
+	GROUND_GRAPHIC("ground-graphic", GroundGraphicObserved.class),
+	PROJECTILE("projectile", ProjectileObserved.class),
+	HITSPLAT("hitsplat", HitsplatObserved.class),
+	TICK("tick", TickState.class),
+	INVENTORY("inventory", InventoryDelta.class),
+	SUPPLIES("supplies", SuppliesSnapshot.class);
+
+	private final String typeName;
+	private final Class<? extends DomainEvent> eventClass;
+
+	EventType(String typeName, Class<? extends DomainEvent> eventClass)
+	{
+		this.typeName = typeName;
+		this.eventClass = eventClass;
+	}
+
+	public String typeName()
+	{
+		return typeName;
+	}
+
+	public Class<? extends DomainEvent> eventClass()
+	{
+		return eventClass;
+	}
+
+	public static EventType of(DomainEvent event)
+	{
+		for (EventType type : values())
+		{
+			if (type.eventClass == event.getClass())
+			{
+				return type;
+			}
+		}
+		throw new IllegalArgumentException("No event type for " + event.getClass().getName());
+	}
+
+	public static Optional<EventType> byName(String typeName)
+	{
+		for (EventType type : values())
+		{
+			if (type.typeName.equals(typeName))
+			{
+				return Optional.of(type);
+			}
+		}
+		return Optional.empty();
+	}
 }
 ```
 
@@ -925,9 +1187,9 @@ public class SuppliesSnapshot implements DomainEvent
 ```java
 package com.yamareviewer.domain.model;
 
-import com.yamareviewer.domain.event.EntryChoice;
 import lombok.Value;
 
+/** Only facts about the recording itself; every game observation is an event. */
 @Value
 public class KillHeader
 {
@@ -936,10 +1198,8 @@ public class KillHeader
 	long endEpochMs;
 	String pluginVersion;
 	int schemaVersion;
-	int idsVersion;
-	EntryChoice entryChoice;
-	/** Null in solo. Stored locally only. */
-	String partnerName;
+	/** IdRegistry.fingerprint() of the IDs used while recording. */
+	String idsFingerprint;
 	boolean capture;
 }
 ```
@@ -967,7 +1227,7 @@ public class KillLog
 
 	KillHeader header;
 	List<DomainEvent> events;
-	/** Events that could not be read back (unknown type from another plugin version). */
+	/** Events of an unknown type that could not be read back. */
 	int skippedEvents;
 
 	public static KillLog of(KillHeader header, List<? extends DomainEvent> events, int skippedEvents)
@@ -1004,28 +1264,27 @@ public class KillLog
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `./gradlew test --tests 'com.yamareviewer.domain.*'`
-Expected: PASS (8 tests).
+Expected: PASS (12 tests).
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add src/main/java/com/yamareviewer/domain src/test/java/com/yamareviewer/domain
-git commit -m "feat: add domain events and the immutable kill log"
+git commit -m "feat: add domain events with stable type names and the kill log"
 ```
 
 ---
 
-### Task 3: ID registry and ids.json
+### Task 3: Roles, tunables and built-in IDs
 
 **Files:**
-- Create: `src/main/java/com/yamareviewer/domain/ids/RoleKind.java`, `Role.java`, `PrayerCheck.java`, `TimingRules.java`, `IdRegistry.java`
-- Create: `src/main/resources/com/yamareviewer/ids.json`
-- Create: `src/main/java/com/yamareviewer/adapter/persistence/IdsJsonLoader.java`
-- Test: `src/test/java/com/yamareviewer/domain/ids/IdRegistryTest.java`, `src/test/java/com/yamareviewer/adapter/persistence/IdsJsonLoaderTest.java`
+- Create: `src/main/java/com/yamareviewer/domain/ids/RoleKind.java`, `Role.java`, `PrayerCheck.java`, `Rules.java`, `IdRegistry.java`
+- Create: `src/main/java/com/yamareviewer/adapter/ids/BuiltInIds.java`
+- Test: `src/test/java/com/yamareviewer/domain/ids/IdRegistryTest.java`, `src/test/java/com/yamareviewer/adapter/ids/BuiltInIdsTest.java`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `Role` (enum, `kind()`), `RoleKind` (enum, `jsonGroup()`), `TimingRules(PrayerCheck prayerCheck, int prayerCheckOffset, int crashImpactWindow, int specResultWindow)` with `TimingRules.DEFAULT`; `IdRegistry(int version, Map<Role, Set<Integer>> ids, Map<Role, Set<String>> texts, TimingRules timing)` with `version()`, `timing()`, `ids(Role)`, `texts(Role)`, `is(Role, int)`, `matchesText(Role, String)`, `isCaptured(Role)`, `roleOf(RoleKind, int)`, `withOverrides(Map<Role, Set<Integer>>)`; `IdsJsonLoader(Gson)` with `loadBundled()` and `parse(Reader)`.
+- Produces: `Role` (`kind()`), `RoleKind`, `PrayerCheck {CAST, HITSPLAT}`, `Rules` (Lombok `@Value @Builder(toBuilder = true)`, `Rules.DEFAULT`), `IdRegistry(Map<Role, Set<Integer>>, Map<Role, Set<String>>)` with `ids`, `texts`, `is`, `matchesText`, `isCaptured`, `roleOf(RoleKind, int)`, `fingerprint()`; `BuiltInIds.registry()`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1039,19 +1298,18 @@ import java.util.Optional;
 import java.util.Set;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 public class IdRegistryTest
 {
 	private final IdRegistry registry = new IdRegistry(
-		3,
 		Map.of(
 			Role.YAMA, Set.of(100),
 			Role.YAMA_STANDARD_ATTACK, Set.of(200, 201),
-			Role.P3_MAGIC_ON_PLAYER, Set.of()),
-		Map.of(Role.PHASE_TRANSITION_TEXT, Set.of("Enough.")),
-		TimingRules.DEFAULT);
+			Role.IMPACT_MAGIC, Set.of()),
+		Map.of(Role.PHASE_TRANSITION_TEXT, Set.of("Enough.")));
 
 	@Test
 	public void matchesIdsByRole()
@@ -1065,8 +1323,8 @@ public class IdRegistryTest
 	public void emptyOrMissingRolesAreUncaptured()
 	{
 		assertTrue(registry.isCaptured(Role.YAMA));
-		assertFalse(registry.isCaptured(Role.P3_MAGIC_ON_PLAYER));
-		assertFalse(registry.isCaptured(Role.SHADOW_CRASH));
+		assertFalse(registry.isCaptured(Role.IMPACT_MAGIC));
+		assertFalse(registry.isCaptured(Role.CRASH_FIREBALL));
 		assertTrue(registry.isCaptured(Role.PHASE_TRANSITION_TEXT));
 	}
 
@@ -1086,14 +1344,28 @@ public class IdRegistryTest
 	}
 
 	@Test
-	public void overridesReplaceOnlyTheirOwnRoles()
+	public void messagesMatchByPrefixWithoutColourTags()
 	{
-		IdRegistry patched = registry.withOverrides(Map.of(Role.P3_MAGIC_ON_PLAYER, Set.of(300)));
+		IdRegistry messages = new IdRegistry(Map.of(), Map.of(Role.PRAYER_DISABLED_MESSAGE, Set.of("You've been injured")));
 
-		assertTrue(patched.is(Role.P3_MAGIC_ON_PLAYER, 300));
-		assertTrue(patched.is(Role.YAMA, 100));
-		assertFalse(registry.isCaptured(Role.P3_MAGIC_ON_PLAYER));
-		assertEquals(3, patched.version());
+		assertTrue(messages.matchesText(Role.PRAYER_DISABLED_MESSAGE,
+			"<col=ef1020>You've been injured and can't use protection prayers!</col>"));
+		assertFalse(messages.matchesText(Role.PRAYER_DISABLED_MESSAGE, "Something else"));
+		assertTrue(messages.isCaptured(Role.PRAYER_DISABLED_MESSAGE));
+	}
+
+	@Test
+	public void fingerprintFollowsTheContent()
+	{
+		IdRegistry same = new IdRegistry(
+			Map.of(Role.YAMA, Set.of(100), Role.YAMA_STANDARD_ATTACK, Set.of(201, 200)),
+			Map.of(Role.PHASE_TRANSITION_TEXT, Set.of("Enough.")));
+		IdRegistry changed = new IdRegistry(
+			Map.of(Role.YAMA, Set.of(101), Role.YAMA_STANDARD_ATTACK, Set.of(200, 201)),
+			Map.of(Role.PHASE_TRANSITION_TEXT, Set.of("Enough.")));
+
+		assertEquals(registry.fingerprint(), same.fingerprint());
+		assertNotEquals(registry.fingerprint(), changed.fingerprint());
 	}
 
 	@Test(expected = UnsupportedOperationException.class)
@@ -1104,93 +1376,73 @@ public class IdRegistryTest
 }
 ```
 
-`src/test/java/com/yamareviewer/adapter/persistence/IdsJsonLoaderTest.java`:
+`src/test/java/com/yamareviewer/adapter/ids/BuiltInIdsTest.java`:
 
 ```java
-package com.yamareviewer.adapter.persistence;
+package com.yamareviewer.adapter.ids;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
 import com.yamareviewer.domain.ids.IdRegistry;
-import com.yamareviewer.domain.ids.PrayerCheck;
 import com.yamareviewer.domain.ids.Role;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.Reader;
-import java.io.StringReader;
-import java.nio.charset.StandardCharsets;
+import com.yamareviewer.domain.ids.RoleKind;
+import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.Set;
-import net.runelite.api.gameval.NpcID;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
-public class IdsJsonLoaderTest
+public class BuiltInIdsTest
 {
-	private static final String TIMING = "{\"prayerCheck\":\"HITSPLAT\",\"prayerCheckOffset\":0,\"crashImpactWindow\":1,\"specResultWindow\":6}";
+	/** Roles with no known constant yet; the logging kills fill them. */
+	private static final Set<Role> TO_CAPTURE = EnumSet.of(Role.JUDGE_FIRE_SURGE, Role.CRASH_FIREBALL, Role.SPEC_PURGING_STAFF, Role.SHADOW_POOL);
 
-	private final IdsJsonLoader loader = new IdsJsonLoader(new Gson());
-
-	@Test
-	public void bundledFileHasTheKnownIds()
-	{
-		IdRegistry ids = loader.loadBundled();
-
-		assertTrue(ids.is(Role.YAMA, 14176));
-		assertTrue(ids.is(Role.YAMAS_DOMAIN, 6045));
-		assertTrue(ids.is(Role.PHASE_TRANSITION_SCRIPT, 948));
-		assertTrue(ids.matchesText(Role.PHASE_TRANSITION_TEXT, "You bore me."));
-		assertFalse(ids.isCaptured(Role.P3_MAGIC_ON_PLAYER));
-		assertEquals(PrayerCheck.HITSPLAT, ids.timing().getPrayerCheck());
-		assertEquals(1, ids.version());
-	}
+	private final IdRegistry ids = BuiltInIds.registry();
 
 	@Test
-	public void bundledNpcIdsMatchRuneLiteGameVals()
+	public void everyRoleHasAValueExceptTheOnesToCapture()
 	{
-		IdRegistry ids = loader.loadBundled();
-
-		assertEquals(Set.of(NpcID.YAMA), ids.ids(Role.YAMA));
-		assertEquals(Set.of(NpcID.YAMA_JUDGE_OF_YAMA), ids.ids(Role.JUDGE));
-		assertEquals(Set.of(NpcID.YAMA_VOIDFLARE), ids.ids(Role.VOID_FLARE));
-		assertEquals(Set.of(NpcID.YAMA_METEOR_NPC), ids.ids(Role.METEOR_NPC));
-		assertEquals(Set.of(NpcID.VOICE_OF_YAMA_1OP, NpcID.VOICE_OF_YAMA_2OP, NpcID.VOICE_OF_YAMA_3OP), ids.ids(Role.VOICE_OF_YAMA));
-	}
-
-	@Test
-	public void bundledFileListsEveryRole() throws IOException
-	{
-		JsonObject root;
-		try (Reader reader = new InputStreamReader(IdsJsonLoader.class.getResourceAsStream(IdsJsonLoader.BUNDLED), StandardCharsets.UTF_8))
-		{
-			root = new Gson().fromJson(reader, JsonObject.class);
-		}
-
 		for (Role role : Role.values())
 		{
-			assertTrue(role + " is missing from ids.json", root.getAsJsonObject(role.kind().jsonGroup()).has(role.name()));
+			assertEquals(role.name(), !TO_CAPTURE.contains(role), ids.isCaptured(role));
 		}
 	}
 
-	@Test(expected = IllegalStateException.class)
-	public void roleUnderTheWrongGroupFails()
+	@Test
+	public void recordingRolesMatchYamaUtilities()
 	{
-		loader.parse(new StringReader("{\"version\":1,\"graphics\":{\"YAMA\":[1]},\"timing\":" + TIMING + "}"));
+		assertEquals(Set.of(14176), ids.ids(Role.YAMA));
+		assertEquals(Set.of(14180), ids.ids(Role.JUDGE));
+		assertEquals(Set.of(14179), ids.ids(Role.VOID_FLARE));
+		assertEquals(Set.of(6045), ids.ids(Role.YAMAS_DOMAIN));
+		assertTrue(ids.ids(Role.VOICE_OF_YAMA).contains(14185));
 	}
 
-	@Test(expected = IllegalArgumentException.class)
-	public void unknownRoleFails()
+	@Test
+	public void noIdBelongsToTwoRolesOfTheSameKind()
 	{
-		loader.parse(new StringReader("{\"version\":1,\"npcs\":{\"NOT_A_ROLE\":[1]},\"timing\":" + TIMING + "}"));
+		for (RoleKind kind : RoleKind.values())
+		{
+			Set<Integer> seen = new HashSet<>();
+			for (Role role : Role.values())
+			{
+				if (role.kind() != kind)
+				{
+					continue;
+				}
+				for (int id : ids.ids(role))
+				{
+					assertTrue(role + " reuses " + id, seen.add(id));
+				}
+			}
+		}
 	}
 }
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `./gradlew test --tests 'com.yamareviewer.domain.ids.*' --tests 'com.yamareviewer.adapter.persistence.IdsJsonLoaderTest'`
-Expected: FAIL — `cannot find symbol` for `IdRegistry`, `Role`, `IdsJsonLoader`.
+Run: `./gradlew test --tests 'com.yamareviewer.domain.ids.*' --tests 'com.yamareviewer.adapter.ids.*'`
+Expected: FAIL — `cannot find symbol` for `IdRegistry`, `Role`, `BuiltInIds`.
 
 - [ ] **Step 3: Write the ID types**
 
@@ -1201,27 +1453,16 @@ package com.yamareviewer.domain.ids;
 
 public enum RoleKind
 {
-	NPC("npcs"),
-	REGION("regions"),
-	SCRIPT("scripts"),
-	OVERHEAD("overheads"),
-	OBJECT("objects"),
-	ANIMATION("animations"),
-	GRAPHIC("graphics"),
-	PROJECTILE("projectiles"),
-	ITEM("items");
-
-	private final String jsonGroup;
-
-	RoleKind(String jsonGroup)
-	{
-		this.jsonGroup = jsonGroup;
-	}
-
-	public String jsonGroup()
-	{
-		return jsonGroup;
-	}
+	NPC,
+	REGION,
+	OVERHEAD,
+	MESSAGE,
+	VARBIT,
+	WIDGET,
+	OBJECT,
+	ANIMATION,
+	GRAPHIC,
+	ITEM
 }
 ```
 
@@ -1230,7 +1471,11 @@ public enum RoleKind
 ```java
 package com.yamareviewer.domain.ids;
 
-/** Everything the plugin needs to recognise, by what it means rather than by number. */
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.Set;
+
+/** Everything the plugin needs to recognise, by what it means rather than by number (spec 5.5). */
 public enum Role
 {
 	YAMA(RoleKind.NPC),
@@ -1238,19 +1483,49 @@ public enum Role
 	VOID_FLARE(RoleKind.NPC),
 	VOICE_OF_YAMA(RoleKind.NPC),
 	METEOR_NPC(RoleKind.NPC),
+	JUDGE_FIRE_SURGE(RoleKind.NPC),
 
 	YAMAS_DOMAIN(RoleKind.REGION),
 
-	PHASE_TRANSITION_SCRIPT(RoleKind.SCRIPT),
 	PHASE_TRANSITION_TEXT(RoleKind.OVERHEAD),
+
+	PRAYER_DISABLED_MESSAGE(RoleKind.MESSAGE),
+	GLYPH_CONJURE_MESSAGE(RoleKind.MESSAGE),
+
+	PHASE_VARBIT(RoleKind.VARBIT),
+
+	CONTRACT_NAME_WIDGET(RoleKind.WIDGET),
+
+	CONTRACT_ITEM_FORFEIT_BREATH(RoleKind.ITEM),
+	CONTRACT_ITEM_GLYPHIC_ATTENUATION(RoleKind.ITEM),
+	CONTRACT_ITEM_SENSORY_CLOUDING(RoleKind.ITEM),
+	CONTRACT_ITEM_DIVINE_SEVERANCE(RoleKind.ITEM),
+	CONTRACT_ITEM_BLOODIED_BLOWS(RoleKind.ITEM),
+	CONTRACT_ITEM_FAMILIAR(RoleKind.ITEM),
+	CONTRACT_ITEM_CATALYST(RoleKind.ITEM),
+	CONTRACT_ITEM_WORM(RoleKind.ITEM),
+	CONTRACT_ITEM_SHARD(RoleKind.ITEM),
+	CONTRACT_ITEM_OATHPLATE(RoleKind.ITEM),
+	CONTRACT_ITEM_HARMONY(RoleKind.ITEM),
+	WEAPON_EMBERLIGHT(RoleKind.ITEM),
+	WEAPON_ELDER_MAUL(RoleKind.ITEM),
+	WEAPON_DRAGON_WARHAMMER(RoleKind.ITEM),
+	WEAPON_BANDOS_GODSWORD(RoleKind.ITEM),
+	WEAPON_ACCURSED_SCEPTRE(RoleKind.ITEM),
+	WEAPON_EYE_OF_AYAK(RoleKind.ITEM),
+	WEAPON_SOULFLAME_HORN(RoleKind.ITEM),
+	WEAPON_PURGING_STAFF(RoleKind.ITEM),
+	WEAPON_SARADOMIN_GODSWORD(RoleKind.ITEM),
 
 	GLYPH_FIRE(RoleKind.OBJECT),
 	GLYPH_SHADOW(RoleKind.OBJECT),
 
 	YAMA_STANDARD_ATTACK(RoleKind.ANIMATION),
 	YAMA_MELEE(RoleKind.ANIMATION),
-	YAMA_SNAP(RoleKind.ANIMATION),
+	YAMA_FLARE_SUMMON(RoleKind.ANIMATION),
 	SHADOW_STOMP(RoleKind.ANIMATION),
+	FLARE_EXPLODE(RoleKind.ANIMATION),
+	FLARE_DEATH(RoleKind.ANIMATION),
 	SPEC_EMBERLIGHT(RoleKind.ANIMATION),
 	SPEC_ELDER_MAUL(RoleKind.ANIMATION),
 	SPEC_DRAGON_WARHAMMER(RoleKind.ANIMATION),
@@ -1261,22 +1536,28 @@ public enum Role
 	SPEC_PURGING_STAFF(RoleKind.ANIMATION),
 	SPEC_SARADOMIN_GODSWORD(RoleKind.ANIMATION),
 
-	P3_MAGIC_ON_PLAYER(RoleKind.GRAPHIC),
-	P3_RANGED_ON_PLAYER(RoleKind.GRAPHIC),
-	SHADOW_CRASH(RoleKind.GRAPHIC),
-	FLARE_EXPLOSION(RoleKind.GRAPHIC),
-	GLYPH_SPECIAL(RoleKind.GRAPHIC),
+	YAMA_CAST_MAGIC(RoleKind.GRAPHIC),
+	YAMA_CAST_RANGED(RoleKind.GRAPHIC),
+	IMPACT_MAGIC(RoleKind.GRAPHIC),
+	IMPACT_RANGED(RoleKind.GRAPHIC),
+	CRASH_IMPACT(RoleKind.GRAPHIC),
+	CRASH_FIREBALL(RoleKind.GRAPHIC),
+	SHADOW_WAVE(RoleKind.GRAPHIC),
+	FIRE_STREAK(RoleKind.GRAPHIC),
+	FIRE_ATTACK(RoleKind.GRAPHIC),
 	METEOR_STRIKE(RoleKind.GRAPHIC),
+	GLYPH_PROTECTION(RoleKind.GRAPHIC),
+	PHASE_TRANSITION_GRAPHIC(RoleKind.GRAPHIC),
+	FLARE_HEAL(RoleKind.GRAPHIC),
+	FLARE_HIT(RoleKind.GRAPHIC),
+	SHADOW_POOL(RoleKind.GRAPHIC);
 
-	WEAPON_EMBERLIGHT(RoleKind.ITEM),
-	WEAPON_ELDER_MAUL(RoleKind.ITEM),
-	WEAPON_DRAGON_WARHAMMER(RoleKind.ITEM),
-	WEAPON_BANDOS_GODSWORD(RoleKind.ITEM),
-	WEAPON_ACCURSED_SCEPTRE(RoleKind.ITEM),
-	WEAPON_EYE_OF_AYAK(RoleKind.ITEM),
-	WEAPON_SOULFLAME_HORN(RoleKind.ITEM),
-	WEAPON_PURGING_STAFF(RoleKind.ITEM),
-	WEAPON_SARADOMIN_GODSWORD(RoleKind.ITEM);
+	/** The eleven contract items, one role per contract (spec 6.3.1). */
+	public static final Set<Role> CONTRACT_ITEMS = Collections.unmodifiableSet(EnumSet.of(
+		CONTRACT_ITEM_FORFEIT_BREATH, CONTRACT_ITEM_GLYPHIC_ATTENUATION, CONTRACT_ITEM_SENSORY_CLOUDING,
+		CONTRACT_ITEM_DIVINE_SEVERANCE, CONTRACT_ITEM_BLOODIED_BLOWS, CONTRACT_ITEM_FAMILIAR,
+		CONTRACT_ITEM_CATALYST, CONTRACT_ITEM_WORM, CONTRACT_ITEM_SHARD, CONTRACT_ITEM_OATHPLATE,
+		CONTRACT_ITEM_HARMONY));
 
 	private final RoleKind kind;
 
@@ -1297,30 +1578,56 @@ public enum Role
 ```java
 package com.yamareviewer.domain.ids;
 
-/** Which tick counts as an attack "landing" for the prayer check (spec 6.3). */
+/** Which tick decides a prayer outcome (spec 6.5). */
 public enum PrayerCheck
 {
-	SNAP,
+	CAST,
 	HITSPLAT
 }
 ```
 
-`TimingRules.java`:
+`Rules.java`:
 
 ```java
 package com.yamareviewer.domain.ids;
 
+import lombok.Builder;
 import lombok.Value;
 
+/** Tunables of the classification (spec 5.5). Not game IDs. */
 @Value
-public class TimingRules
+@Builder(toBuilder = true)
+public class Rules
 {
-	public static final TimingRules DEFAULT = new TimingRules(PrayerCheck.HITSPLAT, 0, 1, 6);
+	public static final Rules DEFAULT = Rules.builder()
+		.prayerCheck(PrayerCheck.CAST)
+		.prayerCheckOffset(0)
+		.blockedMaxHit(3)
+		.p1p2AttackCycle(8)
+		.p3AttackCycle(7)
+		.crashImpactWindow(1)
+		.crashSetGap(6)
+		.waveDisableWindow(5)
+		.specResultWindow(6)
+		.statRestoreTicks(100)
+		.minAttackCountRatio(0.6)
+		.minCycleGapRatio(0.8)
+		.minAlternationRatio(0.9)
+		.build();
 
 	PrayerCheck prayerCheck;
 	int prayerCheckOffset;
+	int blockedMaxHit;
+	int p1p2AttackCycle;
+	int p3AttackCycle;
 	int crashImpactWindow;
+	int crashSetGap;
+	int waveDisableWindow;
 	int specResultWindow;
+	int statRestoreTicks;
+	double minAttackCountRatio;
+	double minCycleGapRatio;
+	double minAlternationRatio;
 }
 ```
 
@@ -1336,32 +1643,17 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * All game IDs by role. Built from ids.json, with local overrides layered on top (Part 4).
- * A role with no IDs is "uncaptured" and every section that needs it is hidden.
+ * All game IDs by role. A role with no IDs is "uncaptured" and every section that needs it is hidden.
  */
 public final class IdRegistry
 {
-	private final int version;
 	private final Map<Role, Set<Integer>> ids;
 	private final Map<Role, Set<String>> texts;
-	private final TimingRules timing;
 
-	public IdRegistry(int version, Map<Role, Set<Integer>> ids, Map<Role, Set<String>> texts, TimingRules timing)
+	public IdRegistry(Map<Role, Set<Integer>> ids, Map<Role, Set<String>> texts)
 	{
-		this.version = version;
 		this.ids = copy(ids);
 		this.texts = copy(texts);
-		this.timing = timing;
-	}
-
-	public int version()
-	{
-		return version;
-	}
-
-	public TimingRules timing()
-	{
-		return timing;
 	}
 
 	public Set<Integer> ids(Role role)
@@ -1379,14 +1671,25 @@ public final class IdRegistry
 		return ids(role).contains(id);
 	}
 
+	/** Overhead roles match exactly; message roles match by prefix after colour tags are removed. */
 	public boolean matchesText(Role role, String text)
 	{
-		return text != null && texts(role).contains(text);
+		if (text == null)
+		{
+			return false;
+		}
+		if (role.kind() == RoleKind.MESSAGE)
+		{
+			String plain = text.replaceAll("<[^>]*>", "");
+			return texts(role).stream().anyMatch(plain::startsWith);
+		}
+		return texts(role).contains(text);
 	}
 
 	public boolean isCaptured(Role role)
 	{
-		return role.kind() == RoleKind.OVERHEAD ? !texts(role).isEmpty() : !ids(role).isEmpty();
+		boolean textRole = role.kind() == RoleKind.OVERHEAD || role.kind() == RoleKind.MESSAGE;
+		return textRole ? !texts(role).isEmpty() : !ids(role).isEmpty();
 	}
 
 	/** The first role (in declaration order) of the given kind that contains the id. */
@@ -1402,12 +1705,18 @@ public final class IdRegistry
 		return Optional.empty();
 	}
 
-	public IdRegistry withOverrides(Map<Role, Set<Integer>> overrides)
+	/** Changes whenever any mapping changes; stored in every raw log header. */
+	public String fingerprint()
 	{
-		Map<Role, Set<Integer>> merged = new EnumMap<>(Role.class);
-		merged.putAll(ids);
-		merged.putAll(overrides);
-		return new IdRegistry(version, merged, texts, timing);
+		StringBuilder canonical = new StringBuilder();
+		for (Role role : Role.values())
+		{
+			canonical.append(role.name()).append('=');
+			ids(role).stream().sorted().forEach(id -> canonical.append(id).append(','));
+			texts(role).stream().sorted().forEach(text -> canonical.append(text).append(','));
+			canonical.append(';');
+		}
+		return Integer.toHexString(canonical.toString().hashCode());
 	}
 
 	private static <T> Map<Role, Set<T>> copy(Map<Role, Set<T>> source)
@@ -1419,187 +1728,134 @@ public final class IdRegistry
 }
 ```
 
-- [ ] **Step 4: Write `ids.json`**
+- [ ] **Step 4: Write `BuiltInIds`**
 
-`src/main/resources/com/yamareviewer/ids.json` (every role listed; empty means uncaptured):
-
-```json
-{
-  "version": 1,
-  "npcs": {
-    "YAMA": [14176],
-    "JUDGE": [14180],
-    "VOID_FLARE": [14179],
-    "VOICE_OF_YAMA": [14183, 14184, 14185],
-    "METEOR_NPC": [14182]
-  },
-  "regions": {
-    "YAMAS_DOMAIN": [6045]
-  },
-  "scripts": {
-    "PHASE_TRANSITION_SCRIPT": [948]
-  },
-  "overheads": {
-    "PHASE_TRANSITION_TEXT": ["Begone", "You bore me.", "Enough."]
-  },
-  "objects": {
-    "GLYPH_FIRE": [],
-    "GLYPH_SHADOW": []
-  },
-  "animations": {
-    "YAMA_STANDARD_ATTACK": [],
-    "YAMA_MELEE": [],
-    "YAMA_SNAP": [],
-    "SHADOW_STOMP": [],
-    "SPEC_EMBERLIGHT": [],
-    "SPEC_ELDER_MAUL": [],
-    "SPEC_DRAGON_WARHAMMER": [],
-    "SPEC_BANDOS_GODSWORD": [],
-    "SPEC_ACCURSED_SCEPTRE": [],
-    "SPEC_EYE_OF_AYAK": [],
-    "SPEC_SOULFLAME_HORN": [],
-    "SPEC_PURGING_STAFF": [],
-    "SPEC_SARADOMIN_GODSWORD": []
-  },
-  "graphics": {
-    "P3_MAGIC_ON_PLAYER": [],
-    "P3_RANGED_ON_PLAYER": [],
-    "SHADOW_CRASH": [],
-    "FLARE_EXPLOSION": [],
-    "GLYPH_SPECIAL": [],
-    "METEOR_STRIKE": []
-  },
-  "projectiles": {},
-  "items": {
-    "WEAPON_EMBERLIGHT": [],
-    "WEAPON_ELDER_MAUL": [],
-    "WEAPON_DRAGON_WARHAMMER": [],
-    "WEAPON_BANDOS_GODSWORD": [],
-    "WEAPON_ACCURSED_SCEPTRE": [],
-    "WEAPON_EYE_OF_AYAK": [],
-    "WEAPON_SOULFLAME_HORN": [],
-    "WEAPON_PURGING_STAFF": [],
-    "WEAPON_SARADOMIN_GODSWORD": []
-  },
-  "timing": {
-    "prayerCheck": "HITSPLAT",
-    "prayerCheckOffset": 0,
-    "crashImpactWindow": 1,
-    "specResultWindow": 6
-  }
-}
-```
-
-- [ ] **Step 5: Write `IdsJsonLoader`**
-
-`src/main/java/com/yamareviewer/adapter/persistence/IdsJsonLoader.java`:
+`src/main/java/com/yamareviewer/adapter/ids/BuiltInIds.java`:
 
 ```java
-package com.yamareviewer.adapter.persistence;
+package com.yamareviewer.adapter.ids;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 import com.yamareviewer.domain.ids.IdRegistry;
-import com.yamareviewer.domain.ids.PrayerCheck;
 import com.yamareviewer.domain.ids.Role;
-import com.yamareviewer.domain.ids.RoleKind;
-import com.yamareviewer.domain.ids.TimingRules;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Reader;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.util.EnumMap;
-import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import net.runelite.api.gameval.AnimationID;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.ItemID;
+import net.runelite.api.gameval.NpcID;
+import net.runelite.api.gameval.ObjectID1;
+import net.runelite.api.gameval.SpotanimID;
+import net.runelite.api.gameval.VarbitID;
 
-public final class IdsJsonLoader
+/**
+ * The only place with Yama-specific game IDs. Uses RuneLite's gameval constants, so a RuneLite update
+ * that regenerates them after a game update often fixes a renumbering without a plugin update.
+ * Mappings marked unconfirmed in spec 5.5 are confirmed by the golden tests of the logging kills.
+ * Still to capture: JUDGE_FIRE_SURGE, CRASH_FIREBALL, SPEC_PURGING_STAFF, SHADOW_POOL.
+ */
+public final class BuiltInIds
 {
-	static final String BUNDLED = "/com/yamareviewer/ids.json";
+	/** Yama's Domain, from Yama Utilities; there is no gameval constant for regions. */
+	private static final int YAMAS_DOMAIN_REGION = 6045;
 
-	private final Gson gson;
-
-	public IdsJsonLoader(Gson gson)
+	private BuiltInIds()
 	{
-		this.gson = gson;
 	}
 
-	public IdRegistry loadBundled()
+	public static IdRegistry registry()
 	{
-		try (InputStream in = IdsJsonLoader.class.getResourceAsStream(BUNDLED))
-		{
-			if (in == null)
-			{
-				throw new IllegalStateException("Missing " + BUNDLED);
-			}
-			return parse(new InputStreamReader(in, StandardCharsets.UTF_8));
-		}
-		catch (IOException e)
-		{
-			throw new UncheckedIOException(e);
-		}
-	}
-
-	/** Fails fast on unknown roles or roles filed under the wrong kind: the file ships with the plugin. */
-	public IdRegistry parse(Reader reader)
-	{
-		JsonObject root = gson.fromJson(reader, JsonObject.class);
 		Map<Role, Set<Integer>> ids = new EnumMap<>(Role.class);
-		Map<Role, Set<String>> texts = new EnumMap<>(Role.class);
 
-		for (RoleKind kind : RoleKind.values())
-		{
-			if (!root.has(kind.jsonGroup()))
-			{
-				continue;
-			}
-			for (Map.Entry<String, JsonElement> entry : root.getAsJsonObject(kind.jsonGroup()).entrySet())
-			{
-				Role role = Role.valueOf(entry.getKey());
-				if (role.kind() != kind)
-				{
-					throw new IllegalStateException(role + " is a " + role.kind() + " role but is listed under " + kind.jsonGroup());
-				}
-				if (kind == RoleKind.OVERHEAD)
-				{
-					Set<String> values = new LinkedHashSet<>();
-					entry.getValue().getAsJsonArray().forEach(value -> values.add(value.getAsString()));
-					texts.put(role, values);
-				}
-				else
-				{
-					Set<Integer> values = new LinkedHashSet<>();
-					entry.getValue().getAsJsonArray().forEach(value -> values.add(value.getAsInt()));
-					ids.put(role, values);
-				}
-			}
-		}
+		ids.put(Role.YAMA, Set.of(NpcID.YAMA));
+		ids.put(Role.JUDGE, Set.of(NpcID.YAMA_JUDGE_OF_YAMA));
+		ids.put(Role.VOID_FLARE, Set.of(NpcID.YAMA_VOIDFLARE));
+		ids.put(Role.VOICE_OF_YAMA, Set.of(NpcID.VOICE_OF_YAMA_1OP, NpcID.VOICE_OF_YAMA_2OP, NpcID.VOICE_OF_YAMA_3OP));
+		ids.put(Role.METEOR_NPC, Set.of(NpcID.YAMA_METEOR_NPC));
 
-		JsonObject timing = root.getAsJsonObject("timing");
-		TimingRules rules = new TimingRules(
-			PrayerCheck.valueOf(timing.get("prayerCheck").getAsString()),
-			timing.get("prayerCheckOffset").getAsInt(),
-			timing.get("crashImpactWindow").getAsInt(),
-			timing.get("specResultWindow").getAsInt());
+		ids.put(Role.YAMAS_DOMAIN, Set.of(YAMAS_DOMAIN_REGION));
 
-		return new IdRegistry(root.get("version").getAsInt(), ids, texts, rules);
+		ids.put(Role.PHASE_VARBIT, Set.of(VarbitID.YAMA_TRANSITION_PHASE));
+
+		ids.put(Role.CONTRACT_NAME_WIDGET, Set.of(InterfaceID.YamaContractFight.CONTRACT_NAME));
+
+		ids.put(Role.CONTRACT_ITEM_FORFEIT_BREATH, Set.of(ItemID.YAMA_BINDING_CONTRACT));
+		ids.put(Role.CONTRACT_ITEM_GLYPHIC_ATTENUATION, Set.of(ItemID.YAMA_SPECIAL_CONTRACT));
+		ids.put(Role.CONTRACT_ITEM_SENSORY_CLOUDING, Set.of(ItemID.YAMA_SPELL_CONTRACT));
+		ids.put(Role.CONTRACT_ITEM_DIVINE_SEVERANCE, Set.of(ItemID.YAMA_HEAVYRANGED_CONTRACT));
+		ids.put(Role.CONTRACT_ITEM_BLOODIED_BLOWS, Set.of(ItemID.YAMA_2H_CONTRACT));
+		ids.put(Role.CONTRACT_ITEM_FAMILIAR, Set.of(ItemID.YAMA_PET_CONTRACT));
+		ids.put(Role.CONTRACT_ITEM_CATALYST, Set.of(ItemID.YAMA_CATALYST_CONTRACT));
+		ids.put(Role.CONTRACT_ITEM_WORM, Set.of(ItemID.YAMA_WORM_CONTRACT));
+		ids.put(Role.CONTRACT_ITEM_SHARD, Set.of(ItemID.YAMA_SHARD_CONTRACT));
+		ids.put(Role.CONTRACT_ITEM_OATHPLATE, Set.of(ItemID.YAMA_ARMOUR_CONTRACT));
+		ids.put(Role.CONTRACT_ITEM_HARMONY, Set.of(ItemID.YAMA_HORN_CONTRACT));
+		ids.put(Role.WEAPON_EMBERLIGHT, Set.of(ItemID.EMBERLIGHT));
+		ids.put(Role.WEAPON_ELDER_MAUL, Set.of(ItemID.ELDER_MAUL, ItemID.ELDER_MAUL_ORNAMENT));
+		ids.put(Role.WEAPON_DRAGON_WARHAMMER, Set.of(ItemID.DRAGON_WARHAMMER, ItemID.DRAGON_WARHAMMER_ORNAMENT));
+		ids.put(Role.WEAPON_BANDOS_GODSWORD, Set.of(ItemID.BGS, ItemID.BGSG));
+		ids.put(Role.WEAPON_ACCURSED_SCEPTRE, Set.of(ItemID.WILD_CAVE_ACCURSED_CHARGED, ItemID.WILD_CAVE_ACCURSED_CHARGED_RECOL));
+		ids.put(Role.WEAPON_EYE_OF_AYAK, Set.of(ItemID.EYE_OF_AYAK));
+		ids.put(Role.WEAPON_SOULFLAME_HORN, Set.of(ItemID.SOULFLAME_HORN));
+		ids.put(Role.WEAPON_PURGING_STAFF, Set.of(ItemID.PURGING_STAFF));
+		ids.put(Role.WEAPON_SARADOMIN_GODSWORD, Set.of(ItemID.SGS, ItemID.SGSG));
+
+		ids.put(Role.GLYPH_FIRE, Set.of(ObjectID1.FLOORKIT_SUMMONING03_FULL02));
+		ids.put(Role.GLYPH_SHADOW, Set.of(ObjectID1.FLOORKIT_SUMMONING03_FULL01));
+
+		ids.put(Role.YAMA_STANDARD_ATTACK, Set.of(AnimationID.NPC_YAMA01_MAGIC01));
+		ids.put(Role.YAMA_MELEE, Set.of(AnimationID.NPC_YAMA01_MELEE01));
+		ids.put(Role.YAMA_FLARE_SUMMON, Set.of(AnimationID.NPC_YAMA_SUMMON01));
+		ids.put(Role.SHADOW_STOMP, Set.of(AnimationID.NPC_YAMA01_STOMP01));
+		ids.put(Role.FLARE_EXPLODE, Set.of(AnimationID.NPC_VOIDFLARE_EXPLODE));
+		ids.put(Role.FLARE_DEATH, Set.of(AnimationID.NPC_VOIDFLARE_DEATH));
+		ids.put(Role.SPEC_EMBERLIGHT, Set.of(AnimationID.HUMAN_WEAPON_EMBERLIGHT_01_SPEC));
+		ids.put(Role.SPEC_ELDER_MAUL, Set.of(AnimationID.HUMAN_ELDER_MAUL_SPEC));
+		ids.put(Role.SPEC_DRAGON_WARHAMMER, Set.of(AnimationID.DRAGON_WARHAMMER_SA_PLAYER));
+		ids.put(Role.SPEC_BANDOS_GODSWORD, Set.of(AnimationID.BGS_SPECIAL_PLAYER, AnimationID.BGS_SPECIAL_ORNATE_PLAYER));
+		ids.put(Role.SPEC_ACCURSED_SCEPTRE, Set.of(AnimationID.HUMAN_SPECIAL_ACCURSED));
+		ids.put(Role.SPEC_EYE_OF_AYAK, Set.of(AnimationID.HUMAN_EYE_OF_AYAK_SPECIAL));
+		ids.put(Role.SPEC_SOULFLAME_HORN, Set.of(AnimationID.SOULFLAME_HORN_BLOW_01, AnimationID.SOULFLAME_HORN_BLOW_02,
+			AnimationID.SOULFLAME_HORN_BLOW_03, AnimationID.SOULFLAME_HORN_BLOW_03_NO_FIRE));
+		ids.put(Role.SPEC_SARADOMIN_GODSWORD, Set.of(AnimationID.SGS_SPECIAL_PLAYER, AnimationID.SGS_SPECIAL_ORNATE_PLAYER));
+
+		ids.put(Role.YAMA_CAST_MAGIC, Set.of(SpotanimID.VFX_NPC_YAMA_MAGIC_FIRE_SPOTANIM01));
+		ids.put(Role.YAMA_CAST_RANGED, Set.of(SpotanimID.VFX_NPC_YAMA_MAGIC_SHADOW_SPOTANIM01));
+		ids.put(Role.IMPACT_MAGIC, Set.of(SpotanimID.VFX_PLAYER_YAMA_MAGIC_FIRE_IMPACT01));
+		ids.put(Role.IMPACT_RANGED, Set.of(SpotanimID.VFX_PLAYER_YAMA_MAGIC_SHADOW_IMPACT01));
+		ids.put(Role.CRASH_IMPACT, Set.of(SpotanimID.VFX_PLAYER_YAMA_FALLING_ROCK_IMPACT01));
+		ids.put(Role.SHADOW_WAVE, Set.of(SpotanimID.VFX_SHADOW_WALL_SMALL, SpotanimID.VFX_SHADOW_WALL_01,
+			SpotanimID.VFX_SHADOW_WALL_02, SpotanimID.VFX_SHADOW_WALL_03));
+		ids.put(Role.FIRE_STREAK, Set.of(SpotanimID.VFX_FIRE_WALL_01, SpotanimID.VFX_FIRE_WALL_02, SpotanimID.VFX_FIRE_WALL_03));
+		ids.put(Role.FIRE_ATTACK, Set.of(SpotanimID.VFX_YAMA_FLAMING_ROCK_SPOTANIM_01,
+			SpotanimID.VFX_YAMA_FLAMING_ROCK_PROJECTILE_01, SpotanimID.VFX_YAMA_FLAMING_ROCK_IMPACT_01));
+		ids.put(Role.METEOR_STRIKE, Set.of(SpotanimID.VFX_YAMA_METEOR_SPOTANIM01, SpotanimID.VFX_YAMA_METEOR_PROJECTILE_01,
+			SpotanimID.VFX_YAMA_METEOR_PROJECTILE_02, SpotanimID.VFX_YAMA_METEOR_PROJECTILE_03));
+		ids.put(Role.GLYPH_PROTECTION, Set.of(SpotanimID.VFX_YAMA_FIRE_IMMUNITY, SpotanimID.VFX_YAMA_SHADOW_IMMUNITY));
+		ids.put(Role.PHASE_TRANSITION_GRAPHIC, Set.of(SpotanimID.VFX_YAMA_PORTAL_SHADOW_SPOTANIM01));
+		ids.put(Role.FLARE_HEAL, Set.of(SpotanimID.VFX_VOIDFLARE_EXPLODE_YAMA_IMPACT_RED, SpotanimID.VFX_VOIDFLARE_EXPLODE_YAMA_IMPACT_BLUE));
+		ids.put(Role.FLARE_HIT, Set.of(SpotanimID.VFX_VOIDFLARE_HUMAN_IMPACT_RED, SpotanimID.VFX_VOIDFLARE_HUMAN_IMPACT_BLUE));
+
+		Map<Role, Set<String>> texts = Map.of(
+			Role.PHASE_TRANSITION_TEXT, Set.of("Begone", "You bore me.", "Enough."),
+			Role.PRAYER_DISABLED_MESSAGE, Set.of("You've been injured and can't use protection prayers!"),
+			Role.GLYPH_CONJURE_MESSAGE, Set.of("Yama conjures"));
+
+		return new IdRegistry(ids, texts);
 	}
 }
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `./gradlew test --tests 'com.yamareviewer.domain.ids.*' --tests 'com.yamareviewer.adapter.persistence.IdsJsonLoaderTest'`
-Expected: PASS (11 tests).
+Run: `./gradlew test --tests 'com.yamareviewer.domain.ids.*' --tests 'com.yamareviewer.adapter.ids.*'`
+Expected: PASS (10 tests). If `noIdBelongsToTwoRolesOfTheSameKind` fails, two roles share a constant: fix the mapping, never the test.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/main/java/com/yamareviewer/domain/ids src/main/resources src/main/java/com/yamareviewer/adapter/persistence/IdsJsonLoader.java src/test/java/com/yamareviewer/domain/ids src/test/java/com/yamareviewer/adapter/persistence/IdsJsonLoaderTest.java
-git commit -m "feat: add the ID registry loaded from ids.json"
+git add src/main/java/com/yamareviewer/domain/ids src/main/java/com/yamareviewer/adapter/ids src/test/java/com/yamareviewer/domain/ids src/test/java/com/yamareviewer/adapter/ids
+git commit -m "feat: add roles, tunables and built-in gameval IDs"
 ```
 
 ---
@@ -1612,8 +1868,8 @@ git commit -m "feat: add the ID registry loaded from ids.json"
 - Test: `src/test/java/com/yamareviewer/application/command/KillSessionTest.java`
 
 **Interfaces:**
-- Consumes: Task 2 events and `KillLog`/`KillHeader`.
-- Produces: `SnapshotSource { Optional<SuppliesSnapshot> take(int tick, SnapshotKind kind); }`; `KillEndedListener { void killEnded(KillLog kill); }`; `FightStart(String selfName, List<String> otherPlayers, Position selfPosition)`; `KillSession(KillEndedListener, SnapshotSource, Clock, Supplier<String> killIds, String pluginVersion, int idsVersion, BooleanSupplier captureMode)` with the commands `chooseEntry(EntryChoice)`, `updateRegion(boolean)`, `yamaSpawned(FightStart)`, `partnerSeen(String)`, `record(DomainEvent)`, `endTick()`, `yamaDied()`, `playerDied()`, `leave()` and the queries `state()`, `isFighting()`, `currentTick()`, `partnerName()`.
+- Consumes: Task 2 events, `KillLog`, `KillHeader`.
+- Produces: `SnapshotSource { Optional<SuppliesSnapshot> take(int tick, SnapshotKind kind); }`; `KillEndedListener { void killEnded(KillLog kill); }`; `FightStart(String selfName, Position selfPosition, List<String> playersPresent)`; `KillSession(KillEndedListener, SnapshotSource, Clock, Supplier<String> killIds, String pluginVersion, String idsFingerprint, BooleanSupplier captureMode)` with commands `chooseEntry(EntryChoice)`, `updateRegion(boolean)`, `yamaSpawned(FightStart)`, `playerSeen(String)`, `playerLeft(String)`, `record(DomainEvent)`, `endTick()`, `yamaDied()`, `playerDied()`, `leave()` and queries `state()`, `isFighting()`, `currentTick()`, `partnerName()`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1628,15 +1884,18 @@ import com.yamareviewer.domain.event.AnimationObserved;
 import com.yamareviewer.domain.event.DomainEvent;
 import com.yamareviewer.domain.event.EndReason;
 import com.yamareviewer.domain.event.EntryChoice;
+import com.yamareviewer.domain.event.EntryChosen;
+import com.yamareviewer.domain.event.EventType;
 import com.yamareviewer.domain.event.FightEnded;
 import com.yamareviewer.domain.event.FightStarted;
 import com.yamareviewer.domain.event.HitsplatKind;
 import com.yamareviewer.domain.event.HitsplatObserved;
-import com.yamareviewer.domain.event.PartnerSeen;
+import com.yamareviewer.domain.event.PlayerSeen;
 import com.yamareviewer.domain.event.Position;
-import com.yamareviewer.domain.event.ScriptObserved;
 import com.yamareviewer.domain.event.SnapshotKind;
 import com.yamareviewer.domain.event.SuppliesSnapshot;
+import com.yamareviewer.domain.event.TickState;
+import com.yamareviewer.domain.event.VarbitObserved;
 import com.yamareviewer.domain.model.KillLog;
 import java.time.Clock;
 import java.time.Instant;
@@ -1644,10 +1903,10 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import static java.util.stream.Collectors.toList;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import org.junit.Before;
 import org.junit.Test;
@@ -1664,25 +1923,38 @@ public class KillSessionTest
 	public void setUp()
 	{
 		Clock clock = Clock.fixed(Instant.ofEpochMilli(5_000), ZoneOffset.UTC);
-		session = new KillSession(ended::add, snapshots, clock, () -> "kill-" + killCounter.incrementAndGet(), "0.1.0", 7, () -> capture);
+		session = new KillSession(ended::add, snapshots, clock, () -> "kill-" + killCounter.incrementAndGet(),
+			"0.1.0", "f00d", () -> capture);
 	}
 
 	private static FightStart solo()
 	{
-		return new FightStart("Me", List.of(), new Position(1, 2, 0));
+		return new FightStart("Me", new Position(1, 2, 0), List.of());
+	}
+
+	private static TickState state(int tick)
+	{
+		return new TickState(tick, Set.of(), 99, 99, 100, 100, -1, null, null, null);
 	}
 
 	private static List<String> types(KillLog kill)
 	{
-		return kill.getEvents().stream().map(e -> e.getClass().getSimpleName()).collect(toList());
+		return kill.getEvents().stream().map(e -> EventType.of(e).typeName()).collect(toList());
+	}
+
+	private void armAndStart(FightStart start)
+	{
+		session.updateRegion(true);
+		session.yamaSpawned(start);
 	}
 
 	@Test
 	public void recordsNothingOutsideTheRegion()
 	{
 		session.yamaSpawned(solo());
-		session.record(new ScriptObserved(0, 1));
+		session.record(new VarbitObserved(0, 1, 1));
 		session.yamaDied();
+		session.endTick();
 
 		assertEquals(SessionState.IDLE, session.state());
 		assertTrue(ended.isEmpty());
@@ -1692,20 +1964,21 @@ public class KillSessionTest
 	public void fullKillProducesAnOrderedLog()
 	{
 		session.chooseEntry(EntryChoice.TRAVEL);
-		session.updateRegion(true);
-		session.yamaSpawned(solo());
+		armAndStart(solo());
 		session.record(new AnimationObserved(0, Actor.YAMA, 10));
+		session.record(state(0));
 		session.endTick();
 		session.record(new HitsplatObserved(1, Actor.SELF, HitsplatKind.DAMAGE, 5, 1, false));
 		session.yamaDied();
+		session.record(state(1));
+		session.endTick();
 
 		assertEquals(1, ended.size());
 		KillLog kill = ended.get(0);
-		assertEquals(List.of("EntryChosen", "FightStarted", "SuppliesSnapshot", "AnimationObserved",
-			"HitsplatObserved", "SuppliesSnapshot", "FightEnded"), types(kill));
-		assertEquals(EntryChoice.TRAVEL, kill.getHeader().getEntryChoice());
+		assertEquals(List.of("entry", "fight-start", "supplies", "animation", "tick", "hitsplat", "supplies", "tick", "fight-end"),
+			types(kill));
 		assertEquals("kill-1", kill.getHeader().getKillId());
-		assertEquals(7, kill.getHeader().getIdsVersion());
+		assertEquals("f00d", kill.getHeader().getIdsFingerprint());
 		assertEquals(5_000L, kill.getHeader().getStartEpochMs());
 		assertEquals(EndReason.YAMA_DIED, kill.endReason());
 		assertEquals(1, kill.lastTick());
@@ -1713,63 +1986,83 @@ public class KillSessionTest
 	}
 
 	@Test
-	public void deathTakesTheEndSnapshotBeforeFightEnded()
+	public void deathKeepsTheDeathTicksState()
 	{
-		session.updateRegion(true);
-		session.yamaSpawned(solo());
+		armAndStart(solo());
 		session.endTick();
 		session.playerDied();
 
+		assertTrue(ended.isEmpty());
+		session.record(state(1));
+		session.endTick();
+
 		List<DomainEvent> events = ended.get(0).getEvents();
-		SuppliesSnapshot end = (SuppliesSnapshot) events.get(events.size() - 2);
-		FightEnded fightEnded = (FightEnded) events.get(events.size() - 1);
-		assertEquals(SnapshotKind.END, end.getKind());
-		assertEquals(fightEnded.getTick(), end.getTick());
-		assertEquals(EndReason.PLAYER_DIED, fightEnded.getReason());
+		assertTrue(events.get(events.size() - 2) instanceof TickState);
+		assertEquals(new FightEnded(1, EndReason.PLAYER_DIED), events.get(events.size() - 1));
 	}
 
 	@Test
-	public void leavingMidFightEndsAsLeftAndForgetsTheEntryChoice()
+	public void theEndSnapshotIsTakenWhenTheEndIsSeen()
+	{
+		armAndStart(solo());
+		session.playerDied();
+		session.record(state(0));
+		session.endTick();
+
+		List<DomainEvent> events = ended.get(0).getEvents();
+		SuppliesSnapshot end = (SuppliesSnapshot) events.get(events.size() - 3);
+		assertEquals(SnapshotKind.END, end.getKind());
+	}
+
+	@Test
+	public void leavingMidFightEndsAsLeftAtOnceAndForgetsTheEntryChoice()
 	{
 		session.chooseEntry(EntryChoice.JOIN);
-		session.updateRegion(true);
-		session.yamaSpawned(solo());
+		armAndStart(solo());
 		session.updateRegion(false);
 
 		assertEquals(EndReason.LEFT, ended.get(0).endReason());
-		assertEquals(EntryChoice.JOIN, ended.get(0).getHeader().getEntryChoice());
+		assertEquals(EntryChoice.JOIN, ended.get(0).eventsOf(EntryChosen.class).get(0).getChoice());
 		assertEquals(SessionState.IDLE, session.state());
 
-		session.updateRegion(true);
-		session.yamaSpawned(solo());
+		armAndStart(solo());
 		session.leave();
-		assertEquals(EntryChoice.UNKNOWN, ended.get(1).getHeader().getEntryChoice());
+		assertTrue(ended.get(1).eventsOf(EntryChosen.class).isEmpty());
+	}
+
+	@Test
+	public void leaveAfterDeathKeepsTheDeathReason()
+	{
+		armAndStart(solo());
+		session.playerDied();
+		session.leave();
+
+		assertEquals(EndReason.PLAYER_DIED, ended.get(0).endReason());
 	}
 
 	@Test
 	public void endSnapshotIsSkippedWhenUnavailable()
 	{
-		session.updateRegion(true);
-		session.yamaSpawned(solo());
+		armAndStart(solo());
 		snapshots.available = false;
 		session.leave();
 
-		assertEquals(List.of("EntryChosen", "FightStarted", "SuppliesSnapshot", "FightEnded"), types(ended.get(0)));
+		assertEquals(List.of("fight-start", "supplies", "fight-end"), types(ended.get(0)));
 	}
 
 	@Test
 	public void secondKillInSameInstanceGetsAFreshIdAndTicks()
 	{
-		session.updateRegion(true);
-		session.yamaSpawned(solo());
-		session.endTick();
+		armAndStart(solo());
 		session.endTick();
 		session.endTick();
 		session.yamaDied();
+		session.endTick();
 
 		session.yamaSpawned(solo());
 		session.endTick();
 		session.yamaDied();
+		session.endTick();
 
 		assertEquals(2, ended.size());
 		assertEquals("kill-2", ended.get(1).getHeader().getKillId());
@@ -1780,57 +2073,40 @@ public class KillSessionTest
 	@Test
 	public void spawnWhileFightingIsIgnored()
 	{
-		session.updateRegion(true);
-		session.yamaSpawned(solo());
+		armAndStart(solo());
 		session.endTick();
-		session.yamaSpawned(new FightStart("Me", List.of("Someone"), new Position(9, 9, 0)));
-		session.yamaDied();
+		session.yamaSpawned(new FightStart("Me", new Position(9, 9, 0), List.of("Someone")));
+		session.leave();
 
 		assertEquals(1, ended.get(0).eventsOf(FightStarted.class).size());
-		assertEquals(1, ended.get(0).lastTick());
-		assertNull(ended.get(0).getHeader().getPartnerName());
+		assertTrue(ended.get(0).eventsOf(PlayerSeen.class).isEmpty());
 	}
 
 	@Test
-	public void firstOtherPlayerIsThePartnerAndCaptureIsStored()
+	public void playersPresentOrArrivingAreSeenAndTheFirstIsThePartner()
 	{
 		capture = true;
-		session.updateRegion(true);
-		session.yamaSpawned(new FightStart("Me", List.of("Buddy"), new Position(1, 2, 0)));
+		armAndStart(new FightStart("Me", new Position(1, 2, 0), List.of("Buddy")));
+		session.endTick();
+		session.playerSeen("Late");
+		session.playerLeft("Late");
 
 		assertEquals(Optional.of("Buddy"), session.partnerName());
-		session.yamaDied();
-		assertEquals("Buddy", ended.get(0).getHeader().getPartnerName());
-		assertTrue(ended.get(0).getHeader().isCapture());
-	}
-
-	@Test
-	public void partnerSeenMidFightBecomesPartner()
-	{
-		session.updateRegion(true);
-		session.yamaSpawned(solo());
-		session.endTick();
-		session.partnerSeen("Late");
-		session.partnerSeen("Third");
-		session.yamaDied();
-
+		session.leave();
 		KillLog kill = ended.get(0);
-		assertEquals("Late", kill.getHeader().getPartnerName());
-		List<PartnerSeen> seen = kill.eventsOf(PartnerSeen.class);
-		assertEquals(1, seen.size());
-		assertEquals(1, seen.get(0).getTick());
+		assertEquals(List.of(new PlayerSeen(0, "Buddy"), new PlayerSeen(1, "Late")), kill.eventsOf(PlayerSeen.class));
+		assertTrue(kill.getHeader().isCapture());
 	}
 
 	@Test
 	public void entryChoiceDuringAFightIsIgnored()
 	{
 		session.chooseEntry(EntryChoice.TRAVEL);
-		session.updateRegion(true);
-		session.yamaSpawned(solo());
+		armAndStart(solo());
 		session.chooseEntry(EntryChoice.JOIN);
-		session.yamaDied();
+		session.leave();
 
-		assertEquals(EntryChoice.TRAVEL, ended.get(0).getHeader().getEntryChoice());
+		assertEquals(EntryChoice.TRAVEL, ended.get(0).eventsOf(EntryChosen.class).get(0).getChoice());
 	}
 
 	private static final class FakeSnapshots implements SnapshotSource
@@ -1909,8 +2185,9 @@ import lombok.Value;
 public class FightStart
 {
 	String selfName;
-	List<String> otherPlayers;
 	Position selfPosition;
+	/** Other players already in the arena when Yama spawns. */
+	List<String> playersPresent;
 }
 ```
 
@@ -1928,7 +2205,8 @@ import com.yamareviewer.domain.event.EntryChoice;
 import com.yamareviewer.domain.event.EntryChosen;
 import com.yamareviewer.domain.event.FightEnded;
 import com.yamareviewer.domain.event.FightStarted;
-import com.yamareviewer.domain.event.PartnerSeen;
+import com.yamareviewer.domain.event.PlayerLeft;
+import com.yamareviewer.domain.event.PlayerSeen;
 import com.yamareviewer.domain.event.SnapshotKind;
 import com.yamareviewer.domain.model.KillHeader;
 import com.yamareviewer.domain.model.KillLog;
@@ -1940,8 +2218,8 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 /**
- * The write side. Its public methods are the commands; the only thing it produces is a
- * frozen {@link KillLog}, handed to the {@link KillEndedListener} when the kill ends.
+ * The write side. Its public methods are the commands; the only thing it produces is a frozen
+ * {@link KillLog}, handed to the {@link KillEndedListener} when the kill ends.
  * Not thread-safe: call it from the client thread only.
  */
 public final class KillSession
@@ -1951,26 +2229,27 @@ public final class KillSession
 	private final Clock clock;
 	private final Supplier<String> killIds;
 	private final String pluginVersion;
-	private final int idsVersion;
+	private final String idsFingerprint;
 	private final BooleanSupplier captureMode;
 
 	private final List<DomainEvent> events = new ArrayList<>();
 	private SessionState state = SessionState.IDLE;
-	private EntryChoice entryChoice = EntryChoice.UNKNOWN;
+	private EntryChoice entryChoice;
 	private int tick;
 	private long startEpochMs;
 	private String partnerName;
 	private boolean capture;
+	private EndReason pendingEnd;
 
 	public KillSession(KillEndedListener listener, SnapshotSource snapshots, Clock clock, Supplier<String> killIds,
-		String pluginVersion, int idsVersion, BooleanSupplier captureMode)
+		String pluginVersion, String idsFingerprint, BooleanSupplier captureMode)
 	{
 		this.listener = listener;
 		this.snapshots = snapshots;
 		this.clock = clock;
 		this.killIds = killIds;
 		this.pluginVersion = pluginVersion;
-		this.idsVersion = idsVersion;
+		this.idsFingerprint = idsFingerprint;
 		this.captureMode = captureMode;
 	}
 
@@ -1989,6 +2268,7 @@ public final class KillSession
 		return tick;
 	}
 
+	/** The first other player seen in this fight; used to label actors while recording. */
 	public Optional<String> partnerName()
 	{
 		return Optional.ofNullable(partnerName);
@@ -2024,21 +2304,37 @@ public final class KillSession
 		state = SessionState.FIGHTING;
 		tick = 0;
 		events.clear();
+		pendingEnd = null;
+		partnerName = null;
 		startEpochMs = clock.millis();
-		partnerName = start.getOtherPlayers().isEmpty() ? null : start.getOtherPlayers().get(0);
 		capture = captureMode.getAsBoolean();
-		events.add(new EntryChosen(0, entryChoice));
-		events.add(new FightStarted(0, start.getSelfName(), List.copyOf(start.getOtherPlayers()), start.getSelfPosition()));
+		if (entryChoice != null)
+		{
+			events.add(new EntryChosen(0, entryChoice));
+		}
+		events.add(new FightStarted(0, start.getSelfName(), start.getSelfPosition()));
+		start.getPlayersPresent().forEach(this::playerSeen);
 		snapshots.take(0, SnapshotKind.START).ifPresent(events::add);
 	}
 
-	/** Another player loaded into the arena after the fight began. The first one becomes the partner. */
-	public void partnerSeen(String name)
+	public void playerSeen(String name)
 	{
-		if (state == SessionState.FIGHTING && partnerName == null)
+		if (state != SessionState.FIGHTING)
+		{
+			return;
+		}
+		if (partnerName == null)
 		{
 			partnerName = name;
-			events.add(new PartnerSeen(tick, name));
+		}
+		events.add(new PlayerSeen(tick, name));
+	}
+
+	public void playerLeft(String name)
+	{
+		if (state == SessionState.FIGHTING)
+		{
+			events.add(new PlayerLeft(tick, name));
 		}
 	}
 
@@ -2050,9 +2346,18 @@ public final class KillSession
 		}
 	}
 
+	/** Called after the tick's TickState is recorded. Completes a latched end, otherwise advances the tick. */
 	public void endTick()
 	{
-		if (state == SessionState.FIGHTING)
+		if (state != SessionState.FIGHTING)
+		{
+			return;
+		}
+		if (pendingEnd != null)
+		{
+			complete(pendingEnd);
+		}
+		else
 		{
 			tick++;
 		}
@@ -2060,35 +2365,47 @@ public final class KillSession
 
 	public void yamaDied()
 	{
-		end(EndReason.YAMA_DIED);
+		latch(EndReason.YAMA_DIED);
 	}
 
 	public void playerDied()
 	{
-		end(EndReason.PLAYER_DIED);
+		latch(EndReason.PLAYER_DIED);
 	}
 
-	/** Logout, world hop, leaving the region or plugin shutdown. */
+	/** Logout, world hop, leaving the region or plugin shutdown: no further tick will come. */
 	public void leave()
 	{
-		end(EndReason.LEFT);
+		if (state == SessionState.FIGHTING)
+		{
+			if (pendingEnd == null)
+			{
+				snapshots.take(tick, SnapshotKind.END).ifPresent(events::add);
+			}
+			complete(pendingEnd != null ? pendingEnd : EndReason.LEFT);
+		}
 		state = SessionState.IDLE;
-		entryChoice = EntryChoice.UNKNOWN;
+		entryChoice = null;
 	}
 
-	private void end(EndReason reason)
+	private void latch(EndReason reason)
 	{
-		if (state != SessionState.FIGHTING)
+		if (state == SessionState.FIGHTING && pendingEnd == null)
 		{
-			return;
+			pendingEnd = reason;
+			snapshots.take(tick, SnapshotKind.END).ifPresent(events::add);
 		}
-		snapshots.take(tick, SnapshotKind.END).ifPresent(events::add);
+	}
+
+	private void complete(EndReason reason)
+	{
 		events.add(new FightEnded(tick, reason));
 		KillHeader header = new KillHeader(killIds.get(), startEpochMs, clock.millis(), pluginVersion,
-			KillLog.SCHEMA_VERSION, idsVersion, entryChoice, partnerName, capture);
+			KillLog.SCHEMA_VERSION, idsFingerprint, capture);
 		KillLog kill = KillLog.of(header, events, 0);
 		events.clear();
 		partnerName = null;
+		pendingEnd = null;
 		state = SessionState.ARMED;
 		listener.killEnded(kill);
 	}
@@ -2098,7 +2415,7 @@ public final class KillSession
 - [ ] **Step 5: Run the test to verify it passes**
 
 Run: `./gradlew test --tests 'com.yamareviewer.application.command.KillSessionTest'`
-Expected: PASS (10 tests).
+Expected: PASS (11 tests).
 
 - [ ] **Step 6: Commit**
 
@@ -2114,11 +2431,11 @@ git commit -m "feat: add the KillSession write side"
 **Files:**
 - Create: `src/main/java/com/yamareviewer/application/port/LogRepository.java`
 - Create: `src/main/java/com/yamareviewer/adapter/persistence/FileStore.java`, `FilepathFileStore.java`, `EventCodec.java`, `GsonLogRepository.java`
-- Test: `src/test/java/com/yamareviewer/adapter/persistence/InMemoryFileStore.java`, `EventCodecTest.java`, `GsonLogRepositoryTest.java`
+- Test: `src/test/java/com/yamareviewer/adapter/persistence/InMemoryFileStore.java`, `FilepathFileStoreTest.java`, `EventCodecTest.java`, `GsonLogRepositoryTest.java`
 
 **Interfaces:**
-- Consumes: Task 2 events, `KillLog`, `KillHeader`.
-- Produces: `LogRepository { void save(KillLog); void saveCapture(KillLog); List<KillLog> loadAll(); void prune(int keep); }` (all `throws IOException`, `loadAll` newest first); `FileStore` (relative `/`-separated paths); `EventCodec(Gson)` with `encode`, `decode`, `encodeHeader`, `decodeHeader`, `knownTypes()`; `GsonLogRepository(FileStore, EventCodec)`, package-private `fileName(KillHeader)`, `gzip(byte[])`.
+- Consumes: Task 2 events, `EventType`, `KillLog`, `KillHeader`.
+- Produces: `LogRepository { void save(KillLog); List<KillLog> loadAll(); void prune(int keep); }` (all `throws IOException`, `loadAll` newest first, current schema only); `FileStore` (relative `/`-separated paths); `FilepathFileStore(Filepath)`; `EventCodec(Gson)` with `encode`, `decode`, `encodeHeader`, `decodeHeader`; `GsonLogRepository(FileStore, EventCodec)` with package-private `fileName(KillHeader)` and `gzip(byte[])`.
 
 - [ ] **Step 1: Write the test helper and failing tests**
 
@@ -2190,46 +2507,113 @@ public final class InMemoryFileStore implements FileStore
 }
 ```
 
+`src/test/java/com/yamareviewer/adapter/persistence/FilepathFileStoreTest.java`:
+
+```java
+package com.yamareviewer.adapter.persistence;
+
+import java.io.IOException;
+import java.util.List;
+import net.runelite.client.util.Filepath;
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
+import org.junit.Before;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+
+public class FilepathFileStoreTest
+{
+	@Rule
+	public TemporaryFolder folder = new TemporaryFolder();
+
+	private FilepathFileStore store;
+
+	@Before
+	public void setUp()
+	{
+		// Filepath.Unchecked is fine in tests: the Plugin Hub never compiles them.
+		store = new FilepathFileStore(Filepath.Unchecked.getRooted(folder.getRoot().toPath()));
+	}
+
+	@Test
+	public void writesReadsListsRenamesAndDeletes() throws IOException
+	{
+		store.write("raw/b.jsonl.gz", new byte[]{2});
+		store.write("raw/a.jsonl.gz", new byte[]{1});
+
+		assertEquals(List.of("a.jsonl.gz", "b.jsonl.gz"), store.list("raw"));
+		assertArrayEquals(new byte[]{1}, store.read("raw/a.jsonl.gz"));
+
+		store.rename("raw/a.jsonl.gz", "raw/a.jsonl.gz.corrupt");
+		store.delete("raw/b.jsonl.gz");
+
+		assertEquals(List.of("a.jsonl.gz.corrupt"), store.list("raw"));
+	}
+
+	@Test
+	public void listingAMissingDirectoryIsEmpty() throws IOException
+	{
+		assertEquals(List.of(), store.list("reviews"));
+	}
+
+	@Test(expected = IllegalArgumentException.class)
+	public void pathsCannotEscapeTheRoot() throws IOException
+	{
+		store.write("../outside.txt", new byte[]{1});
+	}
+}
+```
+
 `src/test/java/com/yamareviewer/adapter/persistence/EventCodecTest.java`:
 
 ```java
 package com.yamareviewer.adapter.persistence;
 
 import com.google.gson.Gson;
-import com.tngtech.archunit.core.domain.JavaClass;
-import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.event.AnimationObserved;
 import com.yamareviewer.domain.event.DomainEvent;
 import com.yamareviewer.domain.event.EndReason;
 import com.yamareviewer.domain.event.EntryChoice;
 import com.yamareviewer.domain.event.EntryChosen;
+import com.yamareviewer.domain.event.EventType;
 import com.yamareviewer.domain.event.FightEnded;
 import com.yamareviewer.domain.event.FightStarted;
+import com.yamareviewer.domain.event.GameMessageObserved;
+import com.yamareviewer.domain.event.GameStateKind;
+import com.yamareviewer.domain.event.GameStateObserved;
 import com.yamareviewer.domain.event.GraphicObserved;
 import com.yamareviewer.domain.event.GroundGraphicObserved;
 import com.yamareviewer.domain.event.HitsplatKind;
 import com.yamareviewer.domain.event.HitsplatObserved;
 import com.yamareviewer.domain.event.InventoryDelta;
-import com.yamareviewer.domain.event.ItemStack;
+import com.yamareviewer.domain.event.NpcChangedObserved;
 import com.yamareviewer.domain.event.NpcDespawnObserved;
 import com.yamareviewer.domain.event.NpcSpawnObserved;
+import com.yamareviewer.domain.event.ObjectAnimationObserved;
+import com.yamareviewer.domain.event.ObjectDespawnObserved;
 import com.yamareviewer.domain.event.ObjectSpawnObserved;
 import com.yamareviewer.domain.event.OverheadTextObserved;
-import com.yamareviewer.domain.event.PartnerSeen;
+import com.yamareviewer.domain.event.PlayerLeft;
+import com.yamareviewer.domain.event.PlayerSeen;
 import com.yamareviewer.domain.event.Position;
 import com.yamareviewer.domain.event.ProjectileObserved;
 import com.yamareviewer.domain.event.ProtectionPrayer;
-import com.yamareviewer.domain.event.ScriptObserved;
 import com.yamareviewer.domain.event.SnapshotKind;
 import com.yamareviewer.domain.event.SuppliesSnapshot;
+import com.yamareviewer.domain.event.SupplyItem;
 import com.yamareviewer.domain.event.TickState;
+import com.yamareviewer.domain.event.VarbitObserved;
+import com.yamareviewer.domain.event.WidgetTextObserved;
 import com.yamareviewer.domain.model.KillHeader;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 public class EventCodecTest
@@ -2241,22 +2625,29 @@ public class EventCodecTest
 		Position here = new Position(3200, 3200, 0);
 		return List.of(
 			new EntryChosen(0, EntryChoice.JOIN),
-			new FightStarted(0, "Me", List.of("Buddy"), here),
+			new FightStarted(0, "Me", here),
 			new FightEnded(90, EndReason.PLAYER_DIED),
-			new PartnerSeen(3, "Buddy"),
+			new PlayerSeen(0, "Buddy"),
+			new PlayerLeft(80, "Buddy"),
+			new GameStateObserved(3, GameStateKind.LOADING),
 			new NpcSpawnObserved(1, Actor.flare(7), 1234, 7),
-			new NpcDespawnObserved(2, Actor.YAMA, 1235, 1),
+			new NpcDespawnObserved(2, Actor.YAMA, 1235, 1, true),
+			new NpcChangedObserved(2, Actor.YAMA, 1235, 1236),
 			new ObjectSpawnObserved(3, 555, here),
+			new ObjectDespawnObserved(4, 555, here),
+			new ObjectAnimationObserved(4, 555, here, 12169),
 			new OverheadTextObserved(4, Actor.YAMA, "Enough."),
-			new ScriptObserved(5, 948),
+			new GameMessageObserved(4, "<col=ef1020>You've been injured and can't use protection prayers!</col>"),
+			new VarbitObserved(5, 16550, 2),
+			new WidgetTextObserved(5, 59899907, "Contract of Bloodied Blows"),
 			new AnimationObserved(6, Actor.PARTNER, 42),
 			new GraphicObserved(7, Actor.SELF, 43),
 			new GroundGraphicObserved(8, 44, here),
 			new ProjectileObserved(9, 45, Actor.SELF, 11),
 			new HitsplatObserved(10, Actor.JUDGE, HitsplatKind.BLOCK, 0, 12, true),
-			new TickState(11, Set.of(ProtectionPrayer.MAGIC), 80, 50, 100, 4151, Actor.SELF, here, null),
+			new TickState(11, Set.of(ProtectionPrayer.MAGIC), 80, 50, 100, 64, 4151, Actor.SELF, here, null),
 			new InventoryDelta(12, 385, "Shark", -1),
-			new SuppliesSnapshot(13, SnapshotKind.END, List.of(new ItemStack(385, "Shark", 3))));
+			new SuppliesSnapshot(13, SnapshotKind.END, List.of(new SupplyItem(385, "Shark", 3, 800, 90))));
 	}
 
 	@Test
@@ -2269,32 +2660,28 @@ public class EventCodecTest
 	}
 
 	@Test
-	public void theRoundTripCoversEveryRegisteredType()
+	public void theRoundTripCoversEveryEventType()
 	{
-		Set<String> names = oneOfEach().stream().map(e -> e.getClass().getSimpleName()).collect(Collectors.toSet());
-		assertEquals(codec.knownTypes(), names);
+		Set<EventType> covered = oneOfEach().stream().map(EventType::of).collect(Collectors.toSet());
+		assertEquals(Set.copyOf(Arrays.asList(EventType.values())), covered);
 	}
 
 	@Test
-	public void everyDomainEventClassIsRegistered()
+	public void usesTheStableTypeName()
 	{
-		Set<String> events = new ClassFileImporter().importPackages("com.yamareviewer.domain.event").stream()
-			.filter(c -> c.isAssignableTo(DomainEvent.class) && !c.isInterface())
-			.map(JavaClass::getSimpleName)
-			.collect(Collectors.toSet());
-		assertEquals(events, codec.knownTypes());
+		assertTrue(codec.encode(new VarbitObserved(1, 2, 3)).startsWith("{\"type\":\"varbit\""));
 	}
 
 	@Test
 	public void unknownTypeDecodesToEmpty()
 	{
-		assertEquals(Optional.empty(), codec.decode("{\"type\":\"FromTheFuture\",\"data\":{\"tick\":1}}"));
+		assertEquals(Optional.empty(), codec.decode("{\"type\":\"from-the-future\",\"data\":{\"tick\":1}}"));
 	}
 
 	@Test
 	public void headerRoundTrips()
 	{
-		KillHeader header = new KillHeader("k", 1L, 2L, "0.1.0", 1, 1, EntryChoice.TRAVEL, "Buddy", true);
+		KillHeader header = new KillHeader("k", 1L, 2L, "0.1.0", 1, "f00d", true);
 		assertEquals(header, codec.decodeHeader(codec.encodeHeader(header)));
 	}
 }
@@ -2309,7 +2696,6 @@ import com.google.gson.Gson;
 import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.event.AnimationObserved;
 import com.yamareviewer.domain.event.EndReason;
-import com.yamareviewer.domain.event.EntryChoice;
 import com.yamareviewer.domain.event.FightEnded;
 import com.yamareviewer.domain.model.KillHeader;
 import com.yamareviewer.domain.model.KillLog;
@@ -2328,10 +2714,15 @@ public class GsonLogRepositoryTest
 	private final EventCodec codec = new EventCodec(new Gson());
 	private final GsonLogRepository repository = new GsonLogRepository(files, codec);
 
-	private static KillLog kill(String id, long start, boolean capture)
+	private static KillLog kill(String id, long start, int schemaVersion)
 	{
-		KillHeader header = new KillHeader(id, start, start + 60_000, "0.1.0", KillLog.SCHEMA_VERSION, 1, EntryChoice.TRAVEL, null, capture);
+		KillHeader header = new KillHeader(id, start, start + 60_000, "0.1.0", schemaVersion, "f00d", false);
 		return KillLog.of(header, List.of(new AnimationObserved(0, Actor.YAMA, 1), new FightEnded(5, EndReason.YAMA_DIED)), 0);
+	}
+
+	private static KillLog kill(String id, long start)
+	{
+		return kill(id, start, KillLog.SCHEMA_VERSION);
 	}
 
 	private List<String> loadedIds() throws IOException
@@ -2342,7 +2733,7 @@ public class GsonLogRepositoryTest
 	@Test
 	public void savedLogLoadsBackEqual() throws IOException
 	{
-		KillLog kill = kill("a", 1_000, false);
+		KillLog kill = kill("a", 1_000);
 
 		repository.save(kill);
 
@@ -2352,8 +2743,8 @@ public class GsonLogRepositoryTest
 	@Test
 	public void loadsNewestFirst() throws IOException
 	{
-		repository.save(kill("old", 1_000, false));
-		repository.save(kill("new", 2_000, false));
+		repository.save(kill("old", 1_000));
+		repository.save(kill("new", 2_000));
 
 		assertEquals(List.of("new", "old"), loadedIds());
 	}
@@ -2361,9 +2752,9 @@ public class GsonLogRepositoryTest
 	@Test
 	public void pruneKeepsTheNewest() throws IOException
 	{
-		repository.save(kill("1", 1_000, false));
-		repository.save(kill("2", 2_000, false));
-		repository.save(kill("3", 3_000, false));
+		repository.save(kill("1", 1_000));
+		repository.save(kill("2", 2_000));
+		repository.save(kill("3", 3_000));
 
 		repository.prune(2);
 
@@ -2373,7 +2764,7 @@ public class GsonLogRepositoryTest
 	@Test
 	public void corruptFileIsRenamedAndSkipped() throws IOException
 	{
-		repository.save(kill("good", 2_000, false));
+		repository.save(kill("good", 2_000));
 		files.write("raw/0000000001000-bad.jsonl.gz", new byte[]{1, 2, 3});
 
 		assertEquals(List.of("good"), loadedIds());
@@ -2382,11 +2773,21 @@ public class GsonLogRepositoryTest
 	}
 
 	@Test
+	public void otherSchemaVersionsAreSkippedButKept() throws IOException
+	{
+		repository.save(kill("current", 2_000));
+		repository.save(kill("future", 3_000, KillLog.SCHEMA_VERSION + 1));
+
+		assertEquals(List.of("current"), loadedIds());
+		assertEquals(2, files.list("raw").size());
+	}
+
+	@Test
 	public void unknownEventTypesAreCountedNotFatal() throws IOException
 	{
-		KillHeader header = kill("x", 1_000, false).getHeader();
+		KillHeader header = kill("x", 1_000).getHeader();
 		String text = codec.encodeHeader(header) + "\n"
-			+ "{\"type\":\"FromTheFuture\",\"data\":{}}\n"
+			+ "{\"type\":\"from-the-future\",\"data\":{}}\n"
 			+ codec.encode(new FightEnded(3, EndReason.LEFT)) + "\n";
 		files.write("raw/" + GsonLogRepository.fileName(header), GsonLogRepository.gzip(text.getBytes(StandardCharsets.UTF_8)));
 
@@ -2395,26 +2796,15 @@ public class GsonLogRepositoryTest
 		assertEquals(1, loaded.getSkippedEvents());
 		assertEquals(1, loaded.getEvents().size());
 	}
-
-	@Test
-	public void captureCopyIsPlainJsonLines() throws IOException
-	{
-		KillLog kill = kill("cap", 1_000, true);
-
-		repository.saveCapture(kill);
-
-		String text = new String(files.read("capture/cap.jsonl"), StandardCharsets.UTF_8);
-		assertEquals(kill.getHeader(), codec.decodeHeader(text.split("\n")[0]));
-	}
 }
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `./gradlew test --tests 'com.yamareviewer.adapter.persistence.*'`
-Expected: FAIL — `cannot find symbol` for `FileStore`, `EventCodec`, `GsonLogRepository`.
+Expected: FAIL — `cannot find symbol` for `FileStore`, `FilepathFileStore`, `EventCodec`, `GsonLogRepository`.
 
-- [ ] **Step 3: Write the port and `FileStore`**
+- [ ] **Step 3: Write the port and the file stores**
 
 `src/main/java/com/yamareviewer/application/port/LogRepository.java`:
 
@@ -2430,10 +2820,10 @@ public interface LogRepository
 {
 	void save(KillLog kill) throws IOException;
 
-	/** Uncompressed copy for development (capture mode). */
-	void saveCapture(KillLog kill) throws IOException;
-
-	/** Newest first. Unreadable files are renamed with a .corrupt suffix and skipped. */
+	/**
+	 * Newest first, current schema version only. Unreadable files are renamed with a .corrupt suffix
+	 * and skipped; logs of another schema version are skipped and left in place.
+	 */
 	List<KillLog> loadAll() throws IOException;
 
 	/** Deletes the oldest raw logs so that at most {@code keep} remain. */
@@ -2480,7 +2870,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import net.runelite.client.util.Filepath;
 
-/** The production FileStore, rooted at Plugin.getPluginDirectory(). Verified in game, not unit tested. */
+/** The production FileStore, rooted at Plugin.getPluginDirectory(). */
 public final class FilepathFileStore implements FileStore
 {
 	private final Filepath root;
@@ -2556,40 +2946,14 @@ package com.yamareviewer.adapter.persistence;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
-import com.yamareviewer.domain.event.AnimationObserved;
 import com.yamareviewer.domain.event.DomainEvent;
-import com.yamareviewer.domain.event.EntryChosen;
-import com.yamareviewer.domain.event.FightEnded;
-import com.yamareviewer.domain.event.FightStarted;
-import com.yamareviewer.domain.event.GraphicObserved;
-import com.yamareviewer.domain.event.GroundGraphicObserved;
-import com.yamareviewer.domain.event.HitsplatObserved;
-import com.yamareviewer.domain.event.InventoryDelta;
-import com.yamareviewer.domain.event.NpcDespawnObserved;
-import com.yamareviewer.domain.event.NpcSpawnObserved;
-import com.yamareviewer.domain.event.ObjectSpawnObserved;
-import com.yamareviewer.domain.event.OverheadTextObserved;
-import com.yamareviewer.domain.event.PartnerSeen;
-import com.yamareviewer.domain.event.ProjectileObserved;
-import com.yamareviewer.domain.event.ScriptObserved;
-import com.yamareviewer.domain.event.SuppliesSnapshot;
-import com.yamareviewer.domain.event.TickState;
+import com.yamareviewer.domain.event.EventType;
 import com.yamareviewer.domain.model.KillHeader;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
-/** One JSON object per line: {"type": "<SimpleClassName>", "data": {...}}. */
+/** One JSON object per line: {"type": "<stable type name>", "data": {...}}. */
 public final class EventCodec
 {
-	private static final Map<String, Class<? extends DomainEvent>> TYPES = types(
-		EntryChosen.class, FightStarted.class, FightEnded.class, PartnerSeen.class,
-		NpcSpawnObserved.class, NpcDespawnObserved.class, ObjectSpawnObserved.class,
-		OverheadTextObserved.class, ScriptObserved.class, AnimationObserved.class,
-		GraphicObserved.class, GroundGraphicObserved.class, ProjectileObserved.class,
-		HitsplatObserved.class, TickState.class, InventoryDelta.class, SuppliesSnapshot.class);
-
 	private final Gson gson;
 
 	public EventCodec(Gson gson)
@@ -2610,37 +2974,17 @@ public final class EventCodec
 	public String encode(DomainEvent event)
 	{
 		JsonObject wrapper = new JsonObject();
-		wrapper.addProperty("type", event.getClass().getSimpleName());
+		wrapper.addProperty("type", EventType.of(event).typeName());
 		wrapper.add("data", gson.toJsonTree(event));
 		return gson.toJson(wrapper);
 	}
 
-	/** Empty for an event type this version doesn't know (written by a newer plugin version). */
+	/** Empty for a type this version doesn't know. */
 	public Optional<DomainEvent> decode(String line)
 	{
 		JsonObject wrapper = gson.fromJson(line, JsonObject.class);
-		Class<? extends DomainEvent> type = TYPES.get(wrapper.get("type").getAsString());
-		if (type == null)
-		{
-			return Optional.empty();
-		}
-		return Optional.of(gson.fromJson(wrapper.get("data"), type));
-	}
-
-	public Set<String> knownTypes()
-	{
-		return TYPES.keySet();
-	}
-
-	@SafeVarargs
-	private static Map<String, Class<? extends DomainEvent>> types(Class<? extends DomainEvent>... classes)
-	{
-		Map<String, Class<? extends DomainEvent>> map = new HashMap<>();
-		for (Class<? extends DomainEvent> type : classes)
-		{
-			map.put(type.getSimpleName(), type);
-		}
-		return Map.copyOf(map);
+		return EventType.byName(wrapper.get("type").getAsString())
+			.<DomainEvent>map(type -> gson.fromJson(wrapper.get("data"), type.eventClass()));
 	}
 }
 ```
@@ -2675,7 +3019,6 @@ import lombok.extern.slf4j.Slf4j;
 public final class GsonLogRepository implements LogRepository
 {
 	private static final String RAW = "raw";
-	private static final String CAPTURE = "capture";
 	private static final String SUFFIX = ".jsonl.gz";
 
 	private final FileStore files;
@@ -2694,12 +3037,6 @@ public final class GsonLogRepository implements LogRepository
 	}
 
 	@Override
-	public void saveCapture(KillLog kill) throws IOException
-	{
-		files.write(CAPTURE + "/" + kill.getHeader().getKillId() + ".jsonl", lines(kill).getBytes(StandardCharsets.UTF_8));
-	}
-
-	@Override
 	public List<KillLog> loadAll() throws IOException
 	{
 		List<String> names = logFileNames();
@@ -2709,7 +3046,7 @@ public final class GsonLogRepository implements LogRepository
 			String path = RAW + "/" + names.get(i);
 			try
 			{
-				kills.add(parse(new String(gunzip(files.read(path)), StandardCharsets.UTF_8)));
+				parse(new String(gunzip(files.read(path)), StandardCharsets.UTF_8)).ifPresent(kills::add);
 			}
 			catch (IOException | RuntimeException e)
 			{
@@ -2753,10 +3090,15 @@ public final class GsonLogRepository implements LogRepository
 		}
 	}
 
-	private KillLog parse(String text)
+	/** Empty for a log of another schema version. */
+	private Optional<KillLog> parse(String text)
 	{
 		String[] lines = text.split("\n");
 		KillHeader header = codec.decodeHeader(lines[0]);
+		if (header.getSchemaVersion() != KillLog.SCHEMA_VERSION)
+		{
+			return Optional.empty();
+		}
 		List<DomainEvent> events = new ArrayList<>();
 		int skipped = 0;
 		for (int i = 1; i < lines.length; i++)
@@ -2775,7 +3117,7 @@ public final class GsonLogRepository implements LogRepository
 				skipped++;
 			}
 		}
-		return KillLog.of(header, events, skipped);
+		return Optional.of(KillLog.of(header, events, skipped));
 	}
 
 	private String lines(KillLog kill)
@@ -2798,18 +3140,18 @@ public final class GsonLogRepository implements LogRepository
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `./gradlew test --tests 'com.yamareviewer.adapter.persistence.*'`
-Expected: PASS (16 tests, including Task 3's loader tests).
+Expected: PASS (14 tests).
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add src/main/java/com/yamareviewer/application/port/LogRepository.java src/main/java/com/yamareviewer/adapter/persistence src/test/java/com/yamareviewer/adapter/persistence
-git commit -m "feat: store raw kill logs as gzipped JSON lines"
+git commit -m "feat: store raw kill logs as gzipped JSON lines with stable type names"
 ```
 
 ---
 
-### Task 6: KillEndedHandler
+### Task 6: KillEndedHandler on the plugin's own executor
 
 **Files:**
 - Create: `src/main/java/com/yamareviewer/application/handler/KillEndedHandler.java`
@@ -2817,7 +3159,7 @@ git commit -m "feat: store raw kill logs as gzipped JSON lines"
 
 **Interfaces:**
 - Consumes: `KillEndedListener` (Task 4), `LogRepository` (Task 5).
-- Produces: `KillEndedHandler(Executor executor, LogRepository logs, IntSupplier rawLogsKept)` implementing `KillEndedListener`; package-private `handle(KillLog)`. Part 2 extends `handle` with review building.
+- Produces: `KillEndedHandler(ExecutorService executor, LogRepository logs, IntSupplier rawLogsKept)` implementing `KillEndedListener`; `Future<?> pending()` for `ClientShutdown`; package-private `handle(KillLog)`. Part 2 extends `handle` with review building and publishing.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2827,66 +3169,73 @@ git commit -m "feat: store raw kill logs as gzipped JSON lines"
 package com.yamareviewer.application.handler;
 
 import com.yamareviewer.application.port.LogRepository;
-import com.yamareviewer.domain.event.EntryChoice;
 import com.yamareviewer.domain.model.KillHeader;
 import com.yamareviewer.domain.model.KillLog;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import org.junit.After;
 import org.junit.Test;
 
 public class KillEndedHandlerTest
 {
 	private final FakeLogs logs = new FakeLogs();
+	private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> new Thread(r, "yama-reviewer-test"));
 
-	private static KillLog kill(boolean capture)
+	@After
+	public void tearDown()
 	{
-		return KillLog.of(new KillHeader("k", 1L, 2L, "0.1.0", KillLog.SCHEMA_VERSION, 1, EntryChoice.UNKNOWN, null, capture), List.of(), 0);
+		executor.shutdownNow();
+	}
+
+	private static KillLog kill()
+	{
+		return KillLog.of(new KillHeader("k", 1L, 2L, "0.1.0", KillLog.SCHEMA_VERSION, "f00d", false), List.of(), 0);
 	}
 
 	@Test
-	public void savesThenPrunes()
+	public void savesThenPrunesOnTheExecutor() throws Exception
 	{
-		new KillEndedHandler(Runnable::run, logs, () -> 20).killEnded(kill(false));
+		KillEndedHandler handler = new KillEndedHandler(executor, logs, () -> 20);
 
-		assertEquals(List.of("save k", "prune 20"), logs.calls);
+		handler.killEnded(kill());
+		handler.pending().get(5, TimeUnit.SECONDS);
+
+		assertEquals(List.of("save k on yama-reviewer-test", "prune 20"), logs.calls);
 	}
 
 	@Test
-	public void savesACaptureCopyInCaptureMode()
-	{
-		new KillEndedHandler(Runnable::run, logs, () -> 20).killEnded(kill(true));
-
-		assertEquals(List.of("save k", "capture k", "prune 20"), logs.calls);
-	}
-
-	@Test
-	public void storageFailureDoesNotEscape()
+	public void storageFailureDoesNotEscape() throws Exception
 	{
 		logs.fail = true;
+		KillEndedHandler handler = new KillEndedHandler(executor, logs, () -> 20);
 
-		new KillEndedHandler(Runnable::run, logs, () -> 20).killEnded(kill(false));
+		handler.killEnded(kill());
+		handler.pending().get(5, TimeUnit.SECONDS);
 
 		assertTrue(logs.calls.isEmpty());
 	}
 
 	@Test
-	public void workRunsOnTheExecutorNotTheCaller()
+	public void aStoppedExecutorIsLoggedNotThrown()
 	{
-		List<Runnable> queued = new ArrayList<>();
-		new KillEndedHandler(queued::add, logs, () -> 20).killEnded(kill(false));
+		executor.shutdownNow();
+		KillEndedHandler handler = new KillEndedHandler(executor, logs, () -> 20);
 
-		assertTrue(logs.calls.isEmpty());
-		queued.forEach(Runnable::run);
-		assertEquals(List.of("save k", "prune 20"), logs.calls);
+		handler.killEnded(kill());
+
+		assertTrue(handler.pending().isDone());
 	}
 
 	private static final class FakeLogs implements LogRepository
 	{
-		private final List<String> calls = new ArrayList<>();
-		private boolean fail;
+		private final List<String> calls = new CopyOnWriteArrayList<>();
+		private volatile boolean fail;
 
 		@Override
 		public void save(KillLog kill) throws IOException
@@ -2895,13 +3244,7 @@ public class KillEndedHandlerTest
 			{
 				throw new IOException("disk full");
 			}
-			calls.add("save " + kill.getHeader().getKillId());
-		}
-
-		@Override
-		public void saveCapture(KillLog kill)
-		{
-			calls.add("capture " + kill.getHeader().getKillId());
+			calls.add("save " + kill.getHeader().getKillId() + " on " + Thread.currentThread().getName());
 		}
 
 		@Override
@@ -2935,19 +3278,23 @@ import com.yamareviewer.application.command.KillEndedListener;
 import com.yamareviewer.application.port.LogRepository;
 import com.yamareviewer.domain.model.KillLog;
 import java.io.IOException;
-import java.util.concurrent.Executor;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.IntSupplier;
 import lombok.extern.slf4j.Slf4j;
 
-/** Everything that happens after a kill, off the client thread. Part 1: persist the raw log. */
+/** Everything that happens after a kill, on the plugin's own executor. Part 1: persist the raw log. */
 @Slf4j
 public final class KillEndedHandler implements KillEndedListener
 {
-	private final Executor executor;
+	private final ExecutorService executor;
 	private final LogRepository logs;
 	private final IntSupplier rawLogsKept;
+	private volatile Future<?> pending = CompletableFuture.completedFuture(null);
 
-	public KillEndedHandler(Executor executor, LogRepository logs, IntSupplier rawLogsKept)
+	public KillEndedHandler(ExecutorService executor, LogRepository logs, IntSupplier rawLogsKept)
 	{
 		this.executor = executor;
 		this.logs = logs;
@@ -2957,7 +3304,20 @@ public final class KillEndedHandler implements KillEndedListener
 	@Override
 	public void killEnded(KillLog kill)
 	{
-		executor.execute(() -> handle(kill));
+		try
+		{
+			pending = executor.submit(() -> handle(kill));
+		}
+		catch (RejectedExecutionException e)
+		{
+			log.warn("Plugin stopped before kill {} could be stored", kill.getHeader().getKillId());
+		}
+	}
+
+	/** The latest submitted work, so client shutdown can wait for it. */
+	public Future<?> pending()
+	{
+		return pending;
 	}
 
 	void handle(KillLog kill)
@@ -2965,10 +3325,6 @@ public final class KillEndedHandler implements KillEndedListener
 		try
 		{
 			logs.save(kill);
-			if (kill.getHeader().isCapture())
-			{
-				logs.saveCapture(kill);
-			}
 			logs.prune(Math.max(1, rawLogsKept.getAsInt()));
 		}
 		catch (IOException | RuntimeException e)
@@ -2982,26 +3338,26 @@ public final class KillEndedHandler implements KillEndedListener
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `./gradlew test --tests 'com.yamareviewer.application.handler.KillEndedHandlerTest'`
-Expected: PASS (4 tests).
+Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/yamareviewer/application/handler src/test/java/com/yamareviewer/application/handler
-git commit -m "feat: save raw logs off the client thread when a kill ends"
+git commit -m "feat: save raw logs on the plugin's own executor when a kill ends"
 ```
 
 ---
 
-### Task 7: Actor resolution and event translation
+### Task 7: Positions, actors and event translation
 
 **Files:**
-- Create: `src/main/java/com/yamareviewer/adapter/recording/ActorResolver.java`, `EventTranslator.java`
+- Create: `src/main/java/com/yamareviewer/adapter/recording/PositionReader.java`, `ActorResolver.java`, `EventTranslator.java`
 - Test: `src/test/java/com/yamareviewer/adapter/recording/ActorResolverTest.java`, `EventTranslatorTest.java`
 
 **Interfaces:**
 - Consumes: Task 2 events, Task 3 `IdRegistry`/`Role`/`RoleKind`.
-- Produces: `ActorResolver(Client, IdRegistry, Supplier<Optional<String>> partnerName)` with `Actor resolve(net.runelite.api.Actor)`; `EventTranslator(IdRegistry, ActorResolver, IntSupplier tick, BooleanSupplier capture, IntFunction<String> itemNames, Function<LocalPoint, Position> positions)` with `reset(Map<Integer,Integer>)`, `animationChanged`, `graphicChanged`, `graphicsObjectCreated`, `projectileMoved`, `hitsplatApplied`, `overheadTextChanged`, `scriptPreFired`, `npcSpawned(NPC)`, `npcDespawned(NPC)`, `gameObjectSpawned`, `itemContainerChanged` (all returning `List<DomainEvent>`), static `aggregate(Item[])` and `entryChoice(String)`.
+- Produces: `PositionReader(Client)` with `Position position(LocalPoint)` and `int regionId(LocalPoint)` (both null-safe, non-final for mocking); `ActorResolver(Client, IdRegistry, Supplier<Optional<String>> partnerName)` with `Actor resolve(net.runelite.api.Actor)`; `EventTranslator(IdRegistry, ActorResolver, IntSupplier tick, BooleanSupplier capture, IntFunction<String> itemNames, PositionReader)` with `reset(Map<Integer,Integer>)`, one method per RuneLite event returning `List<DomainEvent>` (including `chatMessage`), `pollObjectAnimations()`, `widgetText(int, String)`, `gameState(GameState)`, `contractConsumed(int)`, and static `aggregate(Item[])`, `entryChoice(String)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3013,7 +3369,6 @@ package com.yamareviewer.adapter.recording;
 import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.ids.IdRegistry;
 import com.yamareviewer.domain.ids.Role;
-import com.yamareviewer.domain.ids.TimingRules;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -3028,9 +3383,9 @@ import static org.mockito.Mockito.when;
 
 public class ActorResolverTest
 {
-	private final IdRegistry ids = new IdRegistry(1,
+	private final IdRegistry ids = new IdRegistry(
 		Map.of(Role.YAMA, Set.of(100), Role.JUDGE, Set.of(101), Role.VOID_FLARE, Set.of(102), Role.METEOR_NPC, Set.of(103)),
-		Map.of(), TimingRules.DEFAULT);
+		Map.of());
 	private final Client client = mock(Client.class);
 	private final Player self = mock(Player.class);
 	private ActorResolver resolver;
@@ -3092,21 +3447,29 @@ import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.event.AnimationObserved;
 import com.yamareviewer.domain.event.DomainEvent;
 import com.yamareviewer.domain.event.EntryChoice;
+import com.yamareviewer.domain.event.GameMessageObserved;
+import com.yamareviewer.domain.event.GameStateKind;
+import com.yamareviewer.domain.event.GameStateObserved;
 import com.yamareviewer.domain.event.GraphicObserved;
 import com.yamareviewer.domain.event.HitsplatKind;
 import com.yamareviewer.domain.event.HitsplatObserved;
 import com.yamareviewer.domain.event.InventoryDelta;
+import com.yamareviewer.domain.event.ObjectAnimationObserved;
 import com.yamareviewer.domain.event.Position;
 import com.yamareviewer.domain.event.ProjectileObserved;
-import com.yamareviewer.domain.event.ScriptObserved;
+import com.yamareviewer.domain.event.VarbitObserved;
 import com.yamareviewer.domain.ids.IdRegistry;
 import com.yamareviewer.domain.ids.Role;
-import com.yamareviewer.domain.ids.TimingRules;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import net.runelite.api.ActorSpotAnim;
+import net.runelite.api.Animation;
+import net.runelite.api.DynamicObject;
+import net.runelite.api.GameObject;
+import net.runelite.api.ChatMessageType;
+import net.runelite.api.GameState;
 import net.runelite.api.Hitsplat;
 import net.runelite.api.HitsplatID;
 import net.runelite.api.Item;
@@ -3116,24 +3479,29 @@ import net.runelite.api.NPC;
 import net.runelite.api.Player;
 import net.runelite.api.Projectile;
 import net.runelite.api.events.AnimationChanged;
+import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.GameObjectSpawned;
 import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.ProjectileMoved;
-import net.runelite.api.events.ScriptPreFired;
+import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InventoryID;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import org.junit.Before;
 import org.junit.Test;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 public class EventTranslatorTest
 {
-	private final IdRegistry ids = new IdRegistry(1,
-		Map.of(Role.YAMA, Set.of(100), Role.PHASE_TRANSITION_SCRIPT, Set.of(948)), Map.of(), TimingRules.DEFAULT);
+	private final IdRegistry ids = new IdRegistry(
+		Map.of(Role.YAMA, Set.of(100), Role.PHASE_VARBIT, Set.of(16550), Role.GLYPH_FIRE, Set.of(500)),
+		Map.of());
 	private final ActorResolver actors = mock(ActorResolver.class);
+	private final PositionReader positions = mock(PositionReader.class);
 	private final NPC yama = mock(NPC.class);
 	private final Player stranger = mock(Player.class);
 	private boolean capture;
@@ -3144,7 +3512,8 @@ public class EventTranslatorTest
 	{
 		when(actors.resolve(yama)).thenReturn(Actor.YAMA);
 		when(actors.resolve(stranger)).thenReturn(Actor.other("Stranger"));
-		translator = new EventTranslator(ids, actors, () -> 12, () -> capture, id -> "Item " + id, local -> new Position(1, 2, 0));
+		when(positions.position(any())).thenReturn(new Position(1, 2, 0));
+		translator = new EventTranslator(ids, actors, () -> 12, () -> capture, id -> "Item " + id, positions);
 	}
 
 	private static AnimationChanged animation(net.runelite.api.Actor actor)
@@ -3196,10 +3565,31 @@ public class EventTranslatorTest
 	}
 
 	@Test
-	public void onlyKnownScriptsAreRecorded()
+	public void onlySystemMessagesAreRecorded()
 	{
-		assertEquals(List.of(new ScriptObserved(12, 948)), translator.scriptPreFired(new ScriptPreFired(948)));
-		assertTrue(translator.scriptPreFired(new ScriptPreFired(1)).isEmpty());
+		ChatMessage system = new ChatMessage();
+		system.setType(ChatMessageType.GAMEMESSAGE);
+		system.setMessage("You absorb a Glyph of Fire.");
+		ChatMessage chat = new ChatMessage();
+		chat.setType(ChatMessageType.PUBLICCHAT);
+		chat.setMessage("hello");
+
+		assertEquals(List.of(new GameMessageObserved(12, "You absorb a Glyph of Fire.")), translator.chatMessage(system));
+		assertTrue(translator.chatMessage(chat).isEmpty());
+	}
+
+	@Test
+	public void onlyRoleVarbitsAreRecorded()
+	{
+		VarbitChanged phase = new VarbitChanged();
+		phase.setVarbitId(16550);
+		phase.setValue(2);
+		VarbitChanged other = new VarbitChanged();
+		other.setVarbitId(1);
+		other.setValue(1);
+
+		assertEquals(List.of(new VarbitObserved(12, 16550, 2)), translator.varbitChanged(phase));
+		assertTrue(translator.varbitChanged(other).isEmpty());
 	}
 
 	@Test
@@ -3234,17 +3624,44 @@ public class EventTranslatorTest
 	}
 
 	@Test
+	public void glyphAnimationsArePolledOncePerChange()
+	{
+		Animation activate = mock(Animation.class);
+		when(activate.getId()).thenReturn(12169);
+		DynamicObject renderable = mock(DynamicObject.class);
+		when(renderable.getAnimation()).thenReturn(activate);
+		GameObject glyph = mock(GameObject.class);
+		when(glyph.getId()).thenReturn(500);
+		when(glyph.getRenderable()).thenReturn(renderable);
+		GameObjectSpawned spawned = new GameObjectSpawned();
+		spawned.setGameObject(glyph);
+
+		translator.gameObjectSpawned(spawned);
+
+		assertEquals(List.of(new ObjectAnimationObserved(12, 500, new Position(1, 2, 0), 12169)), translator.pollObjectAnimations());
+		assertTrue(translator.pollObjectAnimations().isEmpty());
+	}
+
+	@Test
 	public void inventoryChangesBecomeDeltasAgainstTheBaseline()
 	{
 		translator.reset(Map.of(385, 5));
 		ItemContainer inventory = mock(ItemContainer.class);
-		when(inventory.getItems()).thenReturn(new Item[]{new Item(385, 1), new Item(385, 1), new Item(385, 1), new Item(-1, 0), new Item(3024, 1)});
+		when(inventory.getItems()).thenReturn(new Item[]{
+			new Item(385, 1), new Item(385, 1), new Item(385, 1), new Item(-1, 0), new Item(3024, 1)});
 		ItemContainerChanged event = new ItemContainerChanged(InventoryID.INV, inventory);
 
 		List<DomainEvent> deltas = translator.itemContainerChanged(event);
 
 		assertEquals(List.of(new InventoryDelta(12, 385, "Item 385", -2), new InventoryDelta(12, 3024, "Item 3024", 1)), deltas);
 		assertTrue(translator.itemContainerChanged(event).isEmpty());
+	}
+
+	@Test
+	public void gameStatesMapToTheDomain()
+	{
+		assertEquals(List.of(new GameStateObserved(12, GameStateKind.LOADING)), translator.gameState(GameState.LOADING));
+		assertEquals(List.of(new GameStateObserved(12, GameStateKind.OTHER)), translator.gameState(GameState.STARTING));
 	}
 
 	@Test
@@ -3260,9 +3677,51 @@ public class EventTranslatorTest
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `./gradlew test --tests 'com.yamareviewer.adapter.recording.*'`
-Expected: FAIL — `cannot find symbol` for `ActorResolver`, `EventTranslator`.
+Expected: FAIL — `cannot find symbol` for `PositionReader`, `ActorResolver`, `EventTranslator`.
 
-- [ ] **Step 3: Write `ActorResolver`**
+- [ ] **Step 3: Write `PositionReader` and `ActorResolver`**
+
+`src/main/java/com/yamareviewer/adapter/recording/PositionReader.java`:
+
+```java
+package com.yamareviewer.adapter.recording;
+
+import com.yamareviewer.domain.event.Position;
+import javax.annotation.Nullable;
+import net.runelite.api.Client;
+import net.runelite.api.coords.LocalPoint;
+import net.runelite.api.coords.WorldPoint;
+
+/** The one place that turns local points into template coordinates, so positions are never mixed. */
+public class PositionReader
+{
+	private final Client client;
+
+	public PositionReader(Client client)
+	{
+		this.client = client;
+	}
+
+	@Nullable
+	public Position position(@Nullable LocalPoint local)
+	{
+		WorldPoint world = toWorld(local);
+		return world == null ? null : new Position(world.getX(), world.getY(), world.getPlane());
+	}
+
+	public int regionId(@Nullable LocalPoint local)
+	{
+		WorldPoint world = toWorld(local);
+		return world == null ? -1 : world.getRegionID();
+	}
+
+	@Nullable
+	private WorldPoint toWorld(@Nullable LocalPoint local)
+	{
+		return local == null ? null : WorldPoint.fromLocalInstance(client, local);
+	}
+}
+```
 
 `src/main/java/com/yamareviewer/adapter/recording/ActorResolver.java`:
 
@@ -3281,7 +3740,7 @@ import net.runelite.api.NPC;
 import net.runelite.api.Player;
 import net.runelite.client.util.Text;
 
-/** Maps RuneLite actors to domain actors using only IDs that ship with the plugin. */
+/** Maps RuneLite actors to domain actors. Not final so tests can mock it. */
 public class ActorResolver
 {
 	private final Client client;
@@ -3349,18 +3808,24 @@ import com.yamareviewer.domain.event.ActorKind;
 import com.yamareviewer.domain.event.AnimationObserved;
 import com.yamareviewer.domain.event.DomainEvent;
 import com.yamareviewer.domain.event.EntryChoice;
+import com.yamareviewer.domain.event.GameMessageObserved;
+import com.yamareviewer.domain.event.GameStateKind;
+import com.yamareviewer.domain.event.GameStateObserved;
 import com.yamareviewer.domain.event.GraphicObserved;
 import com.yamareviewer.domain.event.GroundGraphicObserved;
 import com.yamareviewer.domain.event.HitsplatKind;
 import com.yamareviewer.domain.event.HitsplatObserved;
 import com.yamareviewer.domain.event.InventoryDelta;
+import com.yamareviewer.domain.event.NpcChangedObserved;
 import com.yamareviewer.domain.event.NpcDespawnObserved;
 import com.yamareviewer.domain.event.NpcSpawnObserved;
+import com.yamareviewer.domain.event.ObjectAnimationObserved;
+import com.yamareviewer.domain.event.ObjectDespawnObserved;
 import com.yamareviewer.domain.event.ObjectSpawnObserved;
 import com.yamareviewer.domain.event.OverheadTextObserved;
-import com.yamareviewer.domain.event.Position;
 import com.yamareviewer.domain.event.ProjectileObserved;
-import com.yamareviewer.domain.event.ScriptObserved;
+import com.yamareviewer.domain.event.VarbitObserved;
+import com.yamareviewer.domain.event.WidgetTextObserved;
 import com.yamareviewer.domain.ids.IdRegistry;
 import com.yamareviewer.domain.ids.RoleKind;
 import java.util.ArrayList;
@@ -3374,33 +3839,41 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.BooleanSupplier;
-import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.IntSupplier;
 import net.runelite.api.ActorSpotAnim;
+import net.runelite.api.Animation;
+import net.runelite.api.DynamicObject;
 import net.runelite.api.GameObject;
+import net.runelite.api.ChatMessageType;
+import net.runelite.api.GameState;
 import net.runelite.api.GraphicsObject;
 import net.runelite.api.Hitsplat;
 import net.runelite.api.HitsplatID;
 import net.runelite.api.Item;
 import net.runelite.api.NPC;
 import net.runelite.api.Projectile;
-import net.runelite.api.coords.LocalPoint;
+import net.runelite.api.Renderable;
 import net.runelite.api.events.AnimationChanged;
+import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.GameObjectDespawned;
 import net.runelite.api.events.GameObjectSpawned;
 import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.GraphicsObjectCreated;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.api.events.NpcChanged;
 import net.runelite.api.events.OverheadTextChanged;
 import net.runelite.api.events.ProjectileMoved;
-import net.runelite.api.events.ScriptPreFired;
+import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.client.util.Text;
 
 /**
- * The anti-corruption layer: turns RuneLite events into raw domain observations.
- * It never classifies anything. Events about unrelated actors are dropped unless capture mode is on.
+ * The anti-corruption layer: turns RuneLite events into raw domain observations. It never classifies.
+ * Events about unrelated actors are dropped unless capture mode is on; ground graphics, projectiles and
+ * objects are kept unfiltered because everything of that kind in the arena belongs to the fight.
+ * Client thread only.
  */
 public final class EventTranslator
 {
@@ -3411,14 +3884,15 @@ public final class EventTranslator
 	private final IntSupplier tick;
 	private final BooleanSupplier capture;
 	private final IntFunction<String> itemNames;
-	private final Function<LocalPoint, Position> positions;
+	private final PositionReader positions;
 
 	private final Set<String> seenSpotAnims = new HashSet<>();
 	private final Set<Projectile> seenProjectiles = Collections.newSetFromMap(new IdentityHashMap<>());
+	private final Map<GameObject, Integer> trackedObjects = new IdentityHashMap<>();
 	private Map<Integer, Integer> inventory = Map.of();
 
 	public EventTranslator(IdRegistry ids, ActorResolver actors, IntSupplier tick, BooleanSupplier capture,
-		IntFunction<String> itemNames, Function<LocalPoint, Position> positions)
+		IntFunction<String> itemNames, PositionReader positions)
 	{
 		this.ids = ids;
 		this.actors = actors;
@@ -3466,11 +3940,10 @@ public final class EventTranslator
 		return result;
 	}
 
-	/** Ground graphics in the arena all belong to the fight, so every one is kept. */
 	public List<DomainEvent> graphicsObjectCreated(GraphicsObjectCreated event)
 	{
 		GraphicsObject graphic = event.getGraphicsObject();
-		return List.of(new GroundGraphicObserved(tick.getAsInt(), graphic.getId(), positions.apply(graphic.getLocation())));
+		return List.of(new GroundGraphicObserved(tick.getAsInt(), graphic.getId(), positions.position(graphic.getLocation())));
 	}
 
 	public List<DomainEvent> projectileMoved(ProjectileMoved event)
@@ -3504,11 +3977,19 @@ public final class EventTranslator
 		return keep(actor) ? List.of(new OverheadTextObserved(tick.getAsInt(), actor, event.getOverheadText())) : List.of();
 	}
 
-	/** ScriptPreFired fires constantly for interface scripts, so only scripts with a role are kept. */
-	public List<DomainEvent> scriptPreFired(ScriptPreFired event)
+	/** Only system messages; player chat is never recorded. */
+	public List<DomainEvent> chatMessage(ChatMessage event)
 	{
-		return ids.roleOf(RoleKind.SCRIPT, event.getScriptId()).isPresent()
-			? List.of(new ScriptObserved(tick.getAsInt(), event.getScriptId()))
+		return event.getType() == ChatMessageType.GAMEMESSAGE
+			? List.of(new GameMessageObserved(tick.getAsInt(), event.getMessage()))
+			: List.of();
+	}
+
+	/** VarbitChanged fires for every varbit and varp, so only varbits with a role are kept. */
+	public List<DomainEvent> varbitChanged(VarbitChanged event)
+	{
+		return ids.roleOf(RoleKind.VARBIT, event.getVarbitId()).isPresent()
+			? List.of(new VarbitObserved(tick.getAsInt(), event.getVarbitId(), event.getValue()))
 			: List.of();
 	}
 
@@ -3518,17 +3999,56 @@ public final class EventTranslator
 		return keep(actor) ? List.of(new NpcSpawnObserved(tick.getAsInt(), actor, npc.getId(), npc.getIndex())) : List.of();
 	}
 
-	public List<DomainEvent> npcDespawned(NPC npc)
+	public List<DomainEvent> npcDespawned(NPC npc, boolean dying)
 	{
 		Actor actor = actors.resolve(npc);
-		return keep(actor) ? List.of(new NpcDespawnObserved(tick.getAsInt(), actor, npc.getId(), npc.getIndex())) : List.of();
+		return keep(actor) ? List.of(new NpcDespawnObserved(tick.getAsInt(), actor, npc.getId(), npc.getIndex(), dying)) : List.of();
 	}
 
-	/** Objects spawning mid-fight are fight mechanics (glyphs), so every one is kept. */
+	public List<DomainEvent> npcChanged(NpcChanged event)
+	{
+		NPC npc = event.getNpc();
+		Actor actor = actors.resolve(npc);
+		return keep(actor) ? List.of(new NpcChangedObserved(tick.getAsInt(), actor, event.getOld().getId(), npc.getId())) : List.of();
+	}
+
+	/** Also starts tracking glyph objects (every object in capture mode) for animation polling. */
 	public List<DomainEvent> gameObjectSpawned(GameObjectSpawned event)
 	{
 		GameObject object = event.getGameObject();
-		return List.of(new ObjectSpawnObserved(tick.getAsInt(), object.getId(), positions.apply(object.getLocalLocation())));
+		if (capture.getAsBoolean() || ids.roleOf(RoleKind.OBJECT, object.getId()).isPresent())
+		{
+			trackedObjects.put(object, -1);
+		}
+		return List.of(new ObjectSpawnObserved(tick.getAsInt(), object.getId(), positions.position(object.getLocalLocation())));
+	}
+
+	public List<DomainEvent> gameObjectDespawned(GameObjectDespawned event)
+	{
+		GameObject object = event.getGameObject();
+		trackedObjects.remove(object);
+		return List.of(new ObjectDespawnObserved(tick.getAsInt(), object.getId(), positions.position(object.getLocalLocation())));
+	}
+
+	/** RuneLite has no event for object animations, so tracked objects are polled once per tick. */
+	public List<DomainEvent> pollObjectAnimations()
+	{
+		List<DomainEvent> result = new ArrayList<>();
+		for (Map.Entry<GameObject, Integer> entry : trackedObjects.entrySet())
+		{
+			GameObject object = entry.getKey();
+			int animationId = animationOf(object);
+			if (animationId != entry.getValue())
+			{
+				entry.setValue(animationId);
+				if (animationId != -1)
+				{
+					result.add(new ObjectAnimationObserved(tick.getAsInt(), object.getId(),
+						positions.position(object.getLocalLocation()), animationId));
+				}
+			}
+		}
+		return result;
 	}
 
 	public List<DomainEvent> itemContainerChanged(ItemContainerChanged event)
@@ -3551,6 +4071,22 @@ public final class EventTranslator
 		}
 		inventory = now;
 		return result;
+	}
+
+	public List<DomainEvent> widgetText(int componentId, String text)
+	{
+		return List.of(new WidgetTextObserved(tick.getAsInt(), componentId, text));
+	}
+
+	public List<DomainEvent> gameState(GameState state)
+	{
+		return List.of(new GameStateObserved(tick.getAsInt(), kindOf(state)));
+	}
+
+	/** A contract item consumed at the challenge, just before the fight started (spec 6.3). */
+	public DomainEvent contractConsumed(int itemId)
+	{
+		return new InventoryDelta(tick.getAsInt(), itemId, itemNames.apply(itemId), -1);
 	}
 
 	/** Quantities per item id, ignoring empty slots. */
@@ -3595,6 +4131,36 @@ public final class EventTranslator
 		return hitsplat.getAmount() > 0 ? HitsplatKind.DAMAGE : HitsplatKind.OTHER;
 	}
 
+	static GameStateKind kindOf(GameState state)
+	{
+		switch (state)
+		{
+			case LOADING:
+				return GameStateKind.LOADING;
+			case LOGGED_IN:
+				return GameStateKind.LOGGED_IN;
+			case HOPPING:
+				return GameStateKind.HOPPING;
+			case LOGIN_SCREEN:
+				return GameStateKind.LOGIN_SCREEN;
+			case CONNECTION_LOST:
+				return GameStateKind.CONNECTION_LOST;
+			default:
+				return GameStateKind.OTHER;
+		}
+	}
+
+	private static int animationOf(GameObject object)
+	{
+		Renderable renderable = object.getRenderable();
+		if (renderable instanceof DynamicObject)
+		{
+			Animation animation = ((DynamicObject) renderable).getAnimation();
+			return animation == null ? -1 : animation.getId();
+		}
+		return -1;
+	}
+
 	private boolean keep(Actor actor)
 	{
 		return capture.getAsBoolean() || actor.getKind() != ActorKind.OTHER;
@@ -3602,12 +4168,10 @@ public final class EventTranslator
 }
 ```
 
-Note: `ActorResolver` is not `final` so Mockito can mock it; `EventTranslator` is `final`.
-
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `./gradlew test --tests 'com.yamareviewer.adapter.recording.*'`
-Expected: PASS (12 tests).
+Expected: PASS (15 tests).
 
 - [ ] **Step 6: Commit**
 
@@ -3618,27 +4182,26 @@ git commit -m "feat: translate RuneLite events into raw domain observations"
 
 ---
 
-### Task 8: Tick sampling, supply snapshots and plugin wiring
+### Task 8: Tick sampling and supply snapshots
 
 **Files:**
-- Create: `src/main/java/com/yamareviewer/adapter/recording/TickSampler.java`, `SnapshotReader.java`
-- Modify: `src/main/java/com/yamareviewer/YamaReviewerPlugin.java` (replace the Task 1 skeleton)
-- Test: `src/test/java/com/yamareviewer/adapter/recording/SnapshotReaderTest.java`
+- Create: `src/main/java/com/yamareviewer/adapter/recording/ItemLookup.java`, `ItemManagerLookup.java`, `TickSampler.java`, `SnapshotReader.java`
+- Test: `src/test/java/com/yamareviewer/adapter/recording/SnapshotReaderTest.java`, `TickSamplerTest.java`
 
 **Interfaces:**
-- Consumes: everything from Tasks 2–7.
-- Produces: `TickSampler(Client, ActorResolver, Function<LocalPoint, Position>)` with `TickState sample(int tick, NPC yama, Player partner)`; `SnapshotReader(Client, IntFunction<String>)` implementing `SnapshotSource`; the wired plugin.
+- Consumes: Tasks 2, 4 and 7.
+- Produces: `ItemLookup { String name(int); int gePrice(int); int haPrice(int); }`; `ItemManagerLookup(ItemManager)`; `TickSampler(Client, ActorResolver, PositionReader)` with `TickState sample(int tick, NPC yama, Player partner)` (non-final for mocking); `SnapshotReader(Client, ItemLookup)` implementing `SnapshotSource`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 `src/test/java/com/yamareviewer/adapter/recording/SnapshotReaderTest.java`:
 
 ```java
 package com.yamareviewer.adapter.recording;
 
-import com.yamareviewer.domain.event.ItemStack;
 import com.yamareviewer.domain.event.SnapshotKind;
 import com.yamareviewer.domain.event.SuppliesSnapshot;
+import com.yamareviewer.domain.event.SupplyItem;
 import java.util.List;
 import java.util.Optional;
 import net.runelite.api.Client;
@@ -3658,7 +4221,27 @@ import static org.mockito.Mockito.when;
 public class SnapshotReaderTest
 {
 	private final Client client = mock(Client.class);
-	private final SnapshotReader reader = new SnapshotReader(client, id -> "Item " + id);
+	private final ItemLookup items = new ItemLookup()
+	{
+		@Override
+		public String name(int itemId)
+		{
+			return "Item " + itemId;
+		}
+
+		@Override
+		public int gePrice(int itemId)
+		{
+			return itemId * 10;
+		}
+
+		@Override
+		public int haPrice(int itemId)
+		{
+			return itemId;
+		}
+	};
+	private final SnapshotReader reader = new SnapshotReader(client, items);
 
 	@Before
 	public void setUp()
@@ -3670,18 +4253,18 @@ public class SnapshotReaderTest
 		EnumComposition runes = mock(EnumComposition.class);
 		when(runes.getIntValue(1)).thenReturn(556);
 		when(client.getEnum(EnumID.RUNEPOUCH_RUNE)).thenReturn(runes);
-		when(client.getVarbitValue(VarbitID.RUNE_POUCH_TYPE_1)).thenReturn(1);
-		when(client.getVarbitValue(VarbitID.RUNE_POUCH_QUANTITY_1)).thenReturn(1000);
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_TYPE_6)).thenReturn(1);
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_QUANTITY_6)).thenReturn(1000);
 	}
 
 	@Test
-	public void aggregatesInventoryAndRunePouch()
+	public void aggregatesInventoryAndAllSixRunePouchSlotsWithPrices()
 	{
 		Optional<SuppliesSnapshot> snapshot = reader.take(4, SnapshotKind.START);
 
 		assertEquals(Optional.of(new SuppliesSnapshot(4, SnapshotKind.START, List.of(
-			new ItemStack(385, "Item 385", 2),
-			new ItemStack(556, "Item 556", 1010)))), snapshot);
+			new SupplyItem(385, "Item 385", 2, 3850, 385),
+			new SupplyItem(556, "Item 556", 1010, 5560, 556)))), snapshot);
 	}
 
 	@Test
@@ -3694,12 +4277,118 @@ public class SnapshotReaderTest
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+`src/test/java/com/yamareviewer/adapter/recording/TickSamplerTest.java`:
 
-Run: `./gradlew test --tests 'com.yamareviewer.adapter.recording.SnapshotReaderTest'`
-Expected: FAIL — `cannot find symbol: class SnapshotReader`.
+```java
+package com.yamareviewer.adapter.recording;
 
-- [ ] **Step 3: Write `SnapshotReader` and `TickSampler`**
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.ProtectionPrayer;
+import com.yamareviewer.domain.event.TickState;
+import java.util.Set;
+import net.runelite.api.Client;
+import net.runelite.api.NPC;
+import net.runelite.api.Player;
+import net.runelite.api.Skill;
+import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.gameval.VarbitID;
+import static org.junit.Assert.assertEquals;
+import org.junit.Test;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+public class TickSamplerTest
+{
+	@Test
+	public void readsPrayersFromVarbitsAndEnergiesAsPercent()
+	{
+		Client client = mock(Client.class);
+		Player self = mock(Player.class);
+		NPC yama = mock(NPC.class);
+		ActorResolver actors = mock(ActorResolver.class);
+		when(client.getLocalPlayer()).thenReturn(self);
+		when(yama.getInteracting()).thenReturn(self);
+		when(actors.resolve(self)).thenReturn(Actor.SELF);
+		when(client.getVarbitValue(VarbitID.PRAYER_PROTECTFROMMISSILES)).thenReturn(1);
+		when(client.getBoostedSkillLevel(Skill.HITPOINTS)).thenReturn(87);
+		when(client.getBoostedSkillLevel(Skill.PRAYER)).thenReturn(60);
+		when(client.getVarpValue(VarPlayerID.SA_ENERGY)).thenReturn(750);
+		when(client.getEnergy()).thenReturn(6400);
+
+		TickState state = new TickSampler(client, actors, mock(PositionReader.class)).sample(9, yama, null);
+
+		assertEquals(Set.of(ProtectionPrayer.MISSILES), state.getPrayers());
+		assertEquals(87, state.getHitpoints());
+		assertEquals(60, state.getPrayerPoints());
+		assertEquals(75, state.getSpecEnergy());
+		assertEquals(64, state.getRunEnergy());
+		assertEquals(-1, state.getWeaponId());
+		assertEquals(Actor.SELF, state.getYamaTarget());
+	}
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `./gradlew test --tests 'com.yamareviewer.adapter.recording.SnapshotReaderTest' --tests 'com.yamareviewer.adapter.recording.TickSamplerTest'`
+Expected: FAIL — `cannot find symbol` for `ItemLookup`, `SnapshotReader`, `TickSampler`.
+
+- [ ] **Step 3: Write the item lookup**
+
+`src/main/java/com/yamareviewer/adapter/recording/ItemLookup.java`:
+
+```java
+package com.yamareviewer.adapter.recording;
+
+/** Item facts; implementations may only be called on the client thread. */
+public interface ItemLookup
+{
+	String name(int itemId);
+
+	int gePrice(int itemId);
+
+	int haPrice(int itemId);
+}
+```
+
+`src/main/java/com/yamareviewer/adapter/recording/ItemManagerLookup.java`:
+
+```java
+package com.yamareviewer.adapter.recording;
+
+import net.runelite.client.game.ItemManager;
+
+/** ItemManager reads item definitions, which requires the client thread. */
+public final class ItemManagerLookup implements ItemLookup
+{
+	private final ItemManager itemManager;
+
+	public ItemManagerLookup(ItemManager itemManager)
+	{
+		this.itemManager = itemManager;
+	}
+
+	@Override
+	public String name(int itemId)
+	{
+		return itemManager.getItemComposition(itemId).getName();
+	}
+
+	@Override
+	public int gePrice(int itemId)
+	{
+		return itemManager.getItemPrice(itemId);
+	}
+
+	@Override
+	public int haPrice(int itemId)
+	{
+		return itemManager.getItemComposition(itemId).getHaPrice();
+	}
+}
+```
+
+- [ ] **Step 4: Write `SnapshotReader` and `TickSampler`**
 
 `src/main/java/com/yamareviewer/adapter/recording/SnapshotReader.java`:
 
@@ -3707,15 +4396,14 @@ Expected: FAIL — `cannot find symbol: class SnapshotReader`.
 package com.yamareviewer.adapter.recording;
 
 import com.yamareviewer.application.port.SnapshotSource;
-import com.yamareviewer.domain.event.ItemStack;
 import com.yamareviewer.domain.event.SnapshotKind;
 import com.yamareviewer.domain.event.SuppliesSnapshot;
+import com.yamareviewer.domain.event.SupplyItem;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
-import java.util.function.IntFunction;
 import net.runelite.api.Client;
 import net.runelite.api.EnumComposition;
 import net.runelite.api.EnumID;
@@ -3724,23 +4412,25 @@ import net.runelite.api.ItemContainer;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.gameval.VarbitID;
 
-/** Inventory plus rune pouch. Client thread only. */
+/** Inventory plus the six rune pouch slots, named and priced on the client thread. */
 public final class SnapshotReader implements SnapshotSource
 {
 	private static final int[] RUNE_TYPES = {
-		VarbitID.RUNE_POUCH_TYPE_1, VarbitID.RUNE_POUCH_TYPE_2, VarbitID.RUNE_POUCH_TYPE_3, VarbitID.RUNE_POUCH_TYPE_4
+		VarbitID.RUNE_POUCH_TYPE_1, VarbitID.RUNE_POUCH_TYPE_2, VarbitID.RUNE_POUCH_TYPE_3,
+		VarbitID.RUNE_POUCH_TYPE_4, VarbitID.RUNE_POUCH_TYPE_5, VarbitID.RUNE_POUCH_TYPE_6
 	};
 	private static final int[] RUNE_QUANTITIES = {
-		VarbitID.RUNE_POUCH_QUANTITY_1, VarbitID.RUNE_POUCH_QUANTITY_2, VarbitID.RUNE_POUCH_QUANTITY_3, VarbitID.RUNE_POUCH_QUANTITY_4
+		VarbitID.RUNE_POUCH_QUANTITY_1, VarbitID.RUNE_POUCH_QUANTITY_2, VarbitID.RUNE_POUCH_QUANTITY_3,
+		VarbitID.RUNE_POUCH_QUANTITY_4, VarbitID.RUNE_POUCH_QUANTITY_5, VarbitID.RUNE_POUCH_QUANTITY_6
 	};
 
 	private final Client client;
-	private final IntFunction<String> itemNames;
+	private final ItemLookup lookup;
 
-	public SnapshotReader(Client client, IntFunction<String> itemNames)
+	public SnapshotReader(Client client, ItemLookup lookup)
 	{
 		this.client = client;
-		this.itemNames = itemNames;
+		this.lookup = lookup;
 	}
 
 	@Override
@@ -3766,8 +4456,9 @@ public final class SnapshotReader implements SnapshotSource
 				quantities.merge(runeItems.getIntValue(type), quantity, Integer::sum);
 			}
 		}
-		List<ItemStack> items = new ArrayList<>();
-		quantities.forEach((itemId, quantity) -> items.add(new ItemStack(itemId, itemNames.apply(itemId), quantity)));
+		List<SupplyItem> items = new ArrayList<>();
+		quantities.forEach((itemId, quantity) -> items.add(
+			new SupplyItem(itemId, lookup.name(itemId), quantity, lookup.gePrice(itemId), lookup.haPrice(itemId))));
 		return Optional.of(new SuppliesSnapshot(tick, kind, List.copyOf(items)));
 	}
 }
@@ -3779,13 +4470,11 @@ public final class SnapshotReader implements SnapshotSource
 package com.yamareviewer.adapter.recording;
 
 import com.yamareviewer.domain.event.Actor;
-import com.yamareviewer.domain.event.Position;
 import com.yamareviewer.domain.event.ProtectionPrayer;
 import com.yamareviewer.domain.event.TickState;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.Set;
-import java.util.function.Function;
 import javax.annotation.Nullable;
 import net.runelite.api.Client;
 import net.runelite.api.EquipmentInventorySlot;
@@ -3793,20 +4482,19 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
-import net.runelite.api.Prayer;
 import net.runelite.api.Skill;
-import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.gameval.VarbitID;
 
-/** Reads the end-of-tick state. Client thread only; verified in game. */
-public final class TickSampler
+/** Reads the end-of-tick state. Client thread only. Not final so tests can mock it. */
+public class TickSampler
 {
 	private final Client client;
 	private final ActorResolver actors;
-	private final Function<LocalPoint, Position> positions;
+	private final PositionReader positions;
 
-	public TickSampler(Client client, ActorResolver actors, Function<LocalPoint, Position> positions)
+	public TickSampler(Client client, ActorResolver actors, PositionReader positions)
 	{
 		this.client = client;
 		this.actors = actors;
@@ -3816,15 +4504,15 @@ public final class TickSampler
 	public TickState sample(int tick, @Nullable NPC yama, @Nullable Player partner)
 	{
 		Set<ProtectionPrayer> prayers = EnumSet.noneOf(ProtectionPrayer.class);
-		if (client.isPrayerActive(Prayer.PROTECT_FROM_MAGIC))
+		if (client.getVarbitValue(VarbitID.PRAYER_PROTECTFROMMAGIC) == 1)
 		{
 			prayers.add(ProtectionPrayer.MAGIC);
 		}
-		if (client.isPrayerActive(Prayer.PROTECT_FROM_MISSILES))
+		if (client.getVarbitValue(VarbitID.PRAYER_PROTECTFROMMISSILES) == 1)
 		{
 			prayers.add(ProtectionPrayer.MISSILES);
 		}
-		if (client.isPrayerActive(Prayer.PROTECT_FROM_MELEE))
+		if (client.getVarbitValue(VarbitID.PRAYER_PROTECTFROMMELEE) == 1)
 		{
 			prayers.add(ProtectionPrayer.MELEE);
 		}
@@ -3838,10 +4526,11 @@ public final class TickSampler
 			client.getBoostedSkillLevel(Skill.HITPOINTS),
 			client.getBoostedSkillLevel(Skill.PRAYER),
 			client.getVarpValue(VarPlayerID.SA_ENERGY) / 10,
+			client.getEnergy() / 100,
 			weaponId(),
 			yamaTarget,
-			self == null ? null : positions.apply(self.getLocalLocation()),
-			partner == null ? null : positions.apply(partner.getLocalLocation()));
+			self == null ? null : positions.position(self.getLocalLocation()),
+			partner == null ? null : positions.position(partner.getLocalLocation()));
 	}
 
 	private int weaponId()
@@ -3857,56 +4546,276 @@ public final class TickSampler
 }
 ```
 
-- [ ] **Step 4: Run the snapshot test to verify it passes**
+- [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `./gradlew test --tests 'com.yamareviewer.adapter.recording.SnapshotReaderTest'`
-Expected: PASS (2 tests).
+Run: `./gradlew test --tests 'com.yamareviewer.adapter.recording.SnapshotReaderTest' --tests 'com.yamareviewer.adapter.recording.TickSamplerTest'`
+Expected: PASS (3 tests).
 
-- [ ] **Step 5: Wire the plugin**
+- [ ] **Step 6: Commit**
 
-Replace `src/main/java/com/yamareviewer/YamaReviewerPlugin.java`:
+```bash
+git add src/main/java/com/yamareviewer/adapter/recording src/test/java/com/yamareviewer/adapter/recording
+git commit -m "feat: sample tick state and priced supply snapshots"
+```
+
+---
+
+### Task 9: GameEventListener
+
+**Files:**
+- Create: `src/main/java/com/yamareviewer/adapter/recording/GameEventListener.java`
+- Test: `src/test/java/com/yamareviewer/adapter/recording/GameEventListenerTest.java`
+
+**Interfaces:**
+- Consumes: Tasks 3, 4, 6, 7 and 8.
+- Produces: `GameEventListener(Client, IdRegistry, KillSession, EventTranslator, TickSampler, PositionReader, NpcUtil, Supplier<Future<?>> pendingWrite)` with public `@Subscribe` methods; the plugin registers it on the `EventBus`.
+
+- [ ] **Step 1: Write the failing test**
+
+`src/test/java/com/yamareviewer/adapter/recording/GameEventListenerTest.java`:
 
 ```java
-package com.yamareviewer;
+package com.yamareviewer.adapter.recording;
 
-import com.google.gson.Gson;
-import com.google.inject.Provides;
-import com.yamareviewer.adapter.persistence.EventCodec;
-import com.yamareviewer.adapter.persistence.FilepathFileStore;
-import com.yamareviewer.adapter.persistence.GsonLogRepository;
-import com.yamareviewer.adapter.persistence.IdsJsonLoader;
-import com.yamareviewer.adapter.recording.ActorResolver;
-import com.yamareviewer.adapter.recording.EventTranslator;
-import com.yamareviewer.adapter.recording.SnapshotReader;
-import com.yamareviewer.adapter.recording.TickSampler;
-import com.yamareviewer.application.command.FightStart;
 import com.yamareviewer.application.command.KillSession;
-import com.yamareviewer.application.handler.KillEndedHandler;
-import com.yamareviewer.application.port.LogRepository;
 import com.yamareviewer.domain.event.DomainEvent;
-import com.yamareviewer.domain.event.Position;
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.event.EntryChoice;
+import com.yamareviewer.domain.event.EntryChosen;
+import com.yamareviewer.domain.event.InventoryDelta;
+import com.yamareviewer.domain.event.TickState;
 import com.yamareviewer.domain.ids.IdRegistry;
 import com.yamareviewer.domain.ids.Role;
+import com.yamareviewer.domain.model.KillLog;
 import java.time.Clock;
-import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.function.IntFunction;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import net.runelite.api.Client;
+import net.runelite.api.GameState;
+import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
+import net.runelite.api.MenuEntry;
+import net.runelite.api.NPC;
+import net.runelite.api.Player;
+import net.runelite.api.events.ActorDeath;
+import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GameTick;
+import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.api.events.MenuOptionClicked;
+import net.runelite.api.events.NpcDespawned;
+import net.runelite.api.events.NpcSpawned;
+import net.runelite.api.events.PlayerSpawned;
+import net.runelite.api.gameval.InventoryID;
+import net.runelite.client.game.NpcUtil;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import org.junit.Before;
+import org.junit.Test;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+public class GameEventListenerTest
+{
+	private final Client client = mock(Client.class);
+	private final Player self = mock(Player.class);
+	private final NPC yama = mock(NPC.class);
+	private final PositionReader positions = mock(PositionReader.class);
+	private final TickSampler sampler = mock(TickSampler.class);
+	private final NpcUtil npcUtil = mock(NpcUtil.class);
+	private final List<KillLog> ended = new ArrayList<>();
+	private final IdRegistry ids = new IdRegistry(
+		Map.of(Role.YAMA, Set.of(100), Role.YAMAS_DOMAIN, Set.of(6045), Role.VOICE_OF_YAMA, Set.of(200),
+			Role.CONTRACT_ITEM_BLOODIED_BLOWS, Set.of(700)),
+		Map.of());
+	private KillSession session;
+	private GameEventListener listener;
+
+	@Before
+	public void setUp()
+	{
+		when(client.getLocalPlayer()).thenReturn(self);
+		when(self.getName()).thenReturn("Me");
+		when(positions.regionId(any())).thenReturn(6045);
+		when(yama.getId()).thenReturn(100);
+		when(sampler.sample(anyInt(), any(), any())).thenAnswer(invocation ->
+			new TickState(invocation.getArgument(0), Set.of(), 99, 99, 100, 100, -1, null, null, null));
+		session = new KillSession(ended::add, (tick, kind) -> Optional.empty(), Clock.systemUTC(),
+			() -> "kill", "0.1.0", "f00d", () -> false);
+		ActorResolver actors = new ActorResolver(client, ids, session::partnerName);
+		EventTranslator translator = new EventTranslator(ids, actors, session::currentTick, () -> false, itemId -> "item", positions);
+		listener = new GameEventListener(client, ids, session, translator, sampler, positions, npcUtil,
+			() -> CompletableFuture.completedFuture(null));
+	}
+
+	@Test
+	public void yamaSpawningInTheDomainStartsAFight()
+	{
+		listener.onNpcSpawned(new NpcSpawned(yama));
+
+		assertTrue(session.isFighting());
+	}
+
+	@Test
+	public void yamaOutsideTheDomainIsIgnored()
+	{
+		when(positions.regionId(any())).thenReturn(1234);
+
+		listener.onNpcSpawned(new NpcSpawned(yama));
+
+		assertFalse(session.isFighting());
+	}
+
+	@Test
+	public void deathEndsOnTheNextTickKeepingThatTicksState()
+	{
+		listener.onNpcSpawned(new NpcSpawned(yama));
+		listener.onGameTick(new GameTick());
+		listener.onActorDeath(new ActorDeath(self));
+
+		assertTrue(ended.isEmpty());
+		listener.onGameTick(new GameTick());
+
+		KillLog kill = ended.get(0);
+		List<DomainEvent> events = kill.getEvents();
+		assertEquals(EndReason.PLAYER_DIED, kill.endReason());
+		assertTrue(events.get(events.size() - 2) instanceof TickState);
+		assertEquals(1, events.get(events.size() - 2).getTick());
+		assertEquals(1, kill.lastTick());
+	}
+
+	@Test
+	public void yamaDespawningWhileDyingIsAKill()
+	{
+		listener.onNpcSpawned(new NpcSpawned(yama));
+		when(npcUtil.isDying(yama)).thenReturn(true);
+		listener.onNpcDespawned(new NpcDespawned(yama));
+		listener.onGameTick(new GameTick());
+
+		assertEquals(EndReason.YAMA_DIED, ended.get(0).endReason());
+	}
+
+	@Test
+	public void yamaDespawningOnASceneReloadIsNotAKill()
+	{
+		listener.onNpcSpawned(new NpcSpawned(yama));
+		listener.onNpcDespawned(new NpcDespawned(yama));
+		listener.onGameTick(new GameTick());
+
+		assertTrue(ended.isEmpty());
+		assertTrue(session.isFighting());
+	}
+
+	@Test
+	public void loggingOutEndsTheFightAsLeft()
+	{
+		listener.onNpcSpawned(new NpcSpawned(yama));
+		GameStateChanged loggedOut = new GameStateChanged();
+		loggedOut.setGameState(GameState.LOGIN_SCREEN);
+
+		listener.onGameStateChanged(loggedOut);
+
+		assertEquals(EndReason.LEFT, ended.get(0).endReason());
+	}
+
+	@Test
+	public void travelAtTheVoiceIsRecordedWhenTheFightStarts()
+	{
+		NPC voice = mock(NPC.class);
+		when(voice.getId()).thenReturn(200);
+		MenuEntry entry = mock(MenuEntry.class);
+		when(entry.getNpc()).thenReturn(voice);
+		when(entry.getOption()).thenReturn("Travel");
+		when(positions.regionId(any())).thenReturn(1234);
+		listener.onMenuOptionClicked(new MenuOptionClicked(entry));
+
+		when(positions.regionId(any())).thenReturn(6045);
+		listener.onNpcSpawned(new NpcSpawned(yama));
+		session.leave();
+
+		assertEquals(EntryChoice.TRAVEL, ended.get(0).eventsOf(EntryChosen.class).get(0).getChoice());
+	}
+
+	@Test
+	public void aPartnerLoadingInLateIsSeen()
+	{
+		listener.onNpcSpawned(new NpcSpawned(yama));
+		Player buddy = mock(Player.class);
+		when(buddy.getName()).thenReturn("Buddy");
+
+		listener.onPlayerSpawned(new PlayerSpawned(buddy));
+
+		assertEquals(Optional.of("Buddy"), session.partnerName());
+	}
+
+	@Test
+	public void aContractConsumedAtTheChallengeIsRecordedAtFightStart()
+	{
+		listener.onGameTick(new GameTick());
+		ItemContainer withContract = mock(ItemContainer.class);
+		when(withContract.getItems()).thenReturn(new Item[]{new Item(700, 1)});
+		listener.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, withContract));
+
+		listener.onNpcSpawned(new NpcSpawned(yama));
+		session.leave();
+
+		assertEquals(List.of(new InventoryDelta(0, 700, "item", -1)), ended.get(0).eventsOf(InventoryDelta.class));
+	}
+
+	@Test
+	public void theLocalPlayerIsNeverAPartner()
+	{
+		listener.onPlayerSpawned(new PlayerSpawned(self));
+		listener.onNpcSpawned(new NpcSpawned(yama));
+
+		assertEquals(Optional.empty(), session.partnerName());
+	}
+}
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `./gradlew test --tests 'com.yamareviewer.adapter.recording.GameEventListenerTest'`
+Expected: FAIL — `cannot find symbol: class GameEventListener`.
+
+- [ ] **Step 3: Write `GameEventListener`**
+
+`src/main/java/com/yamareviewer/adapter/recording/GameEventListener.java`:
+
+```java
+package com.yamareviewer.adapter.recording;
+
+import com.yamareviewer.application.command.FightStart;
+import com.yamareviewer.application.command.KillSession;
+import com.yamareviewer.application.command.SessionState;
+import com.yamareviewer.domain.event.DomainEvent;
+import com.yamareviewer.domain.ids.IdRegistry;
+import com.yamareviewer.domain.ids.Role;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Future;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
-import javax.inject.Inject;
-import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
-import net.runelite.api.coords.LocalPoint;
-import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.AnimationChanged;
+import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.GameObjectDespawned;
 import net.runelite.api.events.GameObjectSpawned;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
@@ -3915,112 +4824,83 @@ import net.runelite.api.events.GraphicsObjectCreated;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.MenuOptionClicked;
+import net.runelite.api.events.NpcChanged;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.events.NpcSpawned;
 import net.runelite.api.events.OverheadTextChanged;
 import net.runelite.api.events.PlayerDespawned;
 import net.runelite.api.events.PlayerSpawned;
 import net.runelite.api.events.ProjectileMoved;
-import net.runelite.api.events.ScriptPreFired;
+import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.events.WidgetLoaded;
 import net.runelite.api.gameval.InventoryID;
-import net.runelite.client.callback.ClientThread;
-import net.runelite.client.config.ConfigManager;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.eventbus.Subscribe;
-import net.runelite.client.game.ItemManager;
-import net.runelite.client.plugins.Plugin;
-import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.events.ClientShutdown;
+import net.runelite.client.game.NpcUtil;
 import net.runelite.client.util.Text;
 
 /**
- * Composition root: builds the object graph and forwards RuneLite events. No logic lives here.
- * All @Subscribe methods run on the client thread.
+ * The only receiver of RuneLite game events. Decides when a fight starts and ends and forwards
+ * observations; it never classifies and never touches output. All handlers run on the client thread.
  */
-@Slf4j
-@PluginDescriptor(
-	name = "Yama Reviewer",
-	description = "Records Yama kills and reviews them after the kill ends. Silent during the fight.",
-	tags = {"yama", "pvm", "review", "prayer", "duo"},
-	internalName = "yama-reviewer"
-)
-public class YamaReviewerPlugin extends Plugin
+public class GameEventListener
 {
-	static final String VERSION = "0.1.0";
+	/** How long before the fight a contract item may have left the inventory (spec 6.3). */
+	private static final int CONTRACT_LOOKBACK_TICKS = 20;
 
-	@Inject
-	private Client client;
-
-	@Inject
-	private ClientThread clientThread;
-
-	@Inject
-	private YamaReviewerConfig config;
-
-	@Inject
-	private ScheduledExecutorService executor;
-
-	@Inject
-	private Gson gson;
-
-	@Inject
-	private ItemManager itemManager;
+	private final Client client;
+	private final IdRegistry ids;
+	private final KillSession session;
+	private final EventTranslator translator;
+	private final TickSampler sampler;
+	private final PositionReader positions;
+	private final NpcUtil npcUtil;
+	private final Supplier<Future<?>> pendingWrite;
 
 	private final Map<String, Player> players = new HashMap<>();
-	private IdRegistry ids;
-	private KillSession session;
-	private EventTranslator translator;
-	private TickSampler sampler;
+	private final Set<Integer> pendingWidgetReads = new LinkedHashSet<>();
+	private final Map<Integer, Integer> contractItemsLastSeen = new HashMap<>();
 	private NPC yama;
 
-	@Provides
-	YamaReviewerConfig provideConfig(ConfigManager configManager)
+	public GameEventListener(Client client, IdRegistry ids, KillSession session, EventTranslator translator,
+		TickSampler sampler, PositionReader positions, NpcUtil npcUtil, Supplier<Future<?>> pendingWrite)
 	{
-		return configManager.getConfig(YamaReviewerConfig.class);
-	}
-
-	@Override
-	protected void startUp() throws Exception
-	{
-		ids = new IdsJsonLoader(gson).loadBundled();
-		LogRepository logs = new GsonLogRepository(new FilepathFileStore(getPluginDirectory()), new EventCodec(gson));
-		IntFunction<String> itemNames = itemId -> itemManager.getItemComposition(itemId).getName();
-		KillEndedHandler handler = new KillEndedHandler(executor, logs, config::rawLogsKept);
-		session = new KillSession(handler, new SnapshotReader(client, itemNames), Clock.systemUTC(),
-			() -> UUID.randomUUID().toString(), VERSION, ids.version(), config::captureMode);
-		ActorResolver actors = new ActorResolver(client, ids, () -> session.partnerName());
-		translator = new EventTranslator(ids, actors, () -> session.currentTick(), config::captureMode, itemNames, this::toPosition);
-		sampler = new TickSampler(client, actors, this::toPosition);
-		log.debug("Yama Reviewer started");
-	}
-
-	@Override
-	protected void shutDown()
-	{
-		KillSession ending = session;
-		clientThread.invoke(ending::leave);
-		players.clear();
-		yama = null;
-		log.debug("Yama Reviewer stopped");
+		this.client = client;
+		this.ids = ids;
+		this.session = session;
+		this.translator = translator;
+		this.sampler = sampler;
+		this.positions = positions;
+		this.npcUtil = npcUtil;
+		this.pendingWrite = pendingWrite;
 	}
 
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
 		session.updateRegion(inYamasDomain());
-		if (session.isFighting())
+		if (!session.isFighting())
 		{
-			session.record(sampler.sample(session.currentTick(), yama, partner()));
-			session.endTick();
+			return;
 		}
+		record(translator.pollObjectAnimations());
+		readPendingWidgets();
+		session.record(sampler.sample(session.currentTick(), yama, partner()));
+		session.endTick();
 	}
 
 	@Subscribe
 	public void onGameStateChanged(GameStateChanged event)
 	{
 		GameState state = event.getGameState();
+		record(translator.gameState(state));
 		if (state == GameState.LOGIN_SCREEN || state == GameState.HOPPING)
 		{
 			session.leave();
 			players.clear();
+			pendingWidgetReads.clear();
+			contractItemsLastSeen.clear();
 			yama = null;
 		}
 	}
@@ -4041,11 +4921,22 @@ public class YamaReviewerPlugin extends Plugin
 	public void onNpcDespawned(NpcDespawned event)
 	{
 		NPC npc = event.getNpc();
-		record(translator.npcDespawned(npc));
+		boolean dying = npcUtil.isDying(npc);
+		record(translator.npcDespawned(npc, dying));
 		if (npc == yama)
 		{
+			if (dying)
+			{
+				session.yamaDied();
+			}
 			yama = null;
 		}
+	}
+
+	@Subscribe
+	public void onNpcChanged(NpcChanged event)
+	{
+		record(translator.npcChanged(event));
 	}
 
 	@Subscribe
@@ -4081,17 +4972,54 @@ public class YamaReviewerPlugin extends Plugin
 		}
 		String name = Text.sanitize(player.getName());
 		players.put(name, player);
-		session.partnerSeen(name);
+		session.playerSeen(name);
 	}
 
 	@Subscribe
 	public void onPlayerDespawned(PlayerDespawned event)
 	{
 		Player player = event.getPlayer();
-		if (player.getName() != null)
+		if (player == client.getLocalPlayer() || player.getName() == null)
 		{
-			players.remove(Text.sanitize(player.getName()), player);
+			return;
 		}
+		String name = Text.sanitize(player.getName());
+		players.remove(name, player);
+		session.playerLeft(name);
+	}
+
+	@Subscribe
+	public void onVarbitChanged(VarbitChanged event)
+	{
+		if (session.isFighting())
+		{
+			record(translator.varbitChanged(event));
+		}
+	}
+
+	/** The contract name may be set after the interface loads, so it is read on the following ticks. */
+	@Subscribe
+	public void onWidgetLoaded(WidgetLoaded event)
+	{
+		for (int componentId : ids.ids(Role.CONTRACT_NAME_WIDGET))
+		{
+			if (componentId >>> 16 == event.getGroupId())
+			{
+				pendingWidgetReads.add(componentId);
+			}
+		}
+	}
+
+	@Subscribe
+	public void onGameObjectSpawned(GameObjectSpawned event)
+	{
+		record(translator.gameObjectSpawned(event));
+	}
+
+	@Subscribe
+	public void onGameObjectDespawned(GameObjectDespawned event)
+	{
+		record(translator.gameObjectDespawned(event));
 	}
 
 	@Subscribe
@@ -4149,30 +5077,32 @@ public class YamaReviewerPlugin extends Plugin
 	}
 
 	@Subscribe
-	public void onScriptPreFired(ScriptPreFired event)
-	{
-		if (session.isFighting())
-		{
-			record(translator.scriptPreFired(event));
-		}
-	}
-
-	@Subscribe
-	public void onGameObjectSpawned(GameObjectSpawned event)
-	{
-		if (session.isFighting())
-		{
-			record(translator.gameObjectSpawned(event));
-		}
-	}
-
-	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
+		if (session.state() == SessionState.ARMED && event.getContainerId() == InventoryID.INV)
+		{
+			rememberContractItems(event.getItemContainer());
+		}
 		if (session.isFighting())
 		{
 			record(translator.itemContainerChanged(event));
 		}
+	}
+
+	@Subscribe
+	public void onChatMessage(ChatMessage event)
+	{
+		if (session.isFighting())
+		{
+			record(translator.chatMessage(event));
+		}
+	}
+
+	/** Keeps a raw log that is still being written when the client closes. */
+	@Subscribe
+	public void onClientShutdown(ClientShutdown event)
+	{
+		event.waitFor(pendingWrite.get());
 	}
 
 	private void startFightIfArmed()
@@ -4184,11 +5114,64 @@ public class YamaReviewerPlugin extends Plugin
 			return;
 		}
 		String selfName = self.getName() == null ? "" : Text.sanitize(self.getName());
-		List<String> others = players.keySet().stream().sorted().collect(Collectors.toList());
-		session.yamaSpawned(new FightStart(selfName, others, toPosition(self.getLocalLocation())));
+		List<String> present = players.keySet().stream().sorted().collect(Collectors.toList());
+		session.yamaSpawned(new FightStart(selfName, positions.position(self.getLocalLocation()), present));
 		if (session.isFighting())
 		{
-			translator.reset(currentInventory());
+			Map<Integer, Integer> inventoryNow = currentInventory();
+			translator.reset(inventoryNow);
+			recordContractConsumedAtChallenge(inventoryNow);
+		}
+	}
+
+	private void rememberContractItems(ItemContainer inventory)
+	{
+		for (int itemId : EventTranslator.aggregate(inventory.getItems()).keySet())
+		{
+			if (isContractItem(itemId))
+			{
+				contractItemsLastSeen.put(itemId, client.getTickCount());
+			}
+		}
+	}
+
+	private boolean isContractItem(int itemId)
+	{
+		for (Role role : Role.CONTRACT_ITEMS)
+		{
+			if (ids.is(role, itemId))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** A contract is consumed at the challenge, possibly before Yama spawns; record it as part of the fight. */
+	private void recordContractConsumedAtChallenge(Map<Integer, Integer> inventoryNow)
+	{
+		int now = client.getTickCount();
+		contractItemsLastSeen.forEach((itemId, lastSeen) ->
+		{
+			if (!inventoryNow.containsKey(itemId) && now - lastSeen <= CONTRACT_LOOKBACK_TICKS)
+			{
+				session.record(translator.contractConsumed(itemId));
+			}
+		});
+		contractItemsLastSeen.clear();
+	}
+
+	private void readPendingWidgets()
+	{
+		for (Iterator<Integer> it = pendingWidgetReads.iterator(); it.hasNext(); )
+		{
+			int componentId = it.next();
+			Widget widget = client.getWidget(componentId);
+			if (widget != null && widget.getText() != null && !widget.getText().isEmpty())
+			{
+				record(translator.widgetText(componentId, Text.removeTags(widget.getText())));
+				it.remove();
+			}
 		}
 	}
 
@@ -4200,12 +5183,7 @@ public class YamaReviewerPlugin extends Plugin
 	private boolean inYamasDomain()
 	{
 		Player self = client.getLocalPlayer();
-		if (self == null)
-		{
-			return false;
-		}
-		WorldPoint world = WorldPoint.fromLocalInstance(client, self.getLocalLocation());
-		return world != null && ids.is(Role.YAMAS_DOMAIN, world.getRegionID());
+		return self != null && ids.is(Role.YAMAS_DOMAIN, positions.regionId(self.getLocalLocation()));
 	}
 
 	@Nullable
@@ -4219,52 +5197,192 @@ public class YamaReviewerPlugin extends Plugin
 		ItemContainer inventory = client.getItemContainer(InventoryID.INV);
 		return inventory == null ? Map.of() : EventTranslator.aggregate(inventory.getItems());
 	}
-
-	@Nullable
-	private Position toPosition(@Nullable LocalPoint local)
-	{
-		if (local == null)
-		{
-			return null;
-		}
-		WorldPoint world = WorldPoint.fromLocalInstance(client, local);
-		return world == null ? null : new Position(world.getX(), world.getY(), world.getPlane());
-	}
 }
 ```
 
-- [ ] **Step 6: Run the whole test suite**
+- [ ] **Step 4: Run the test to verify it passes**
 
-Run: `./gradlew test`
-Expected: PASS (all tests so far).
+Run: `./gradlew test --tests 'com.yamareviewer.adapter.recording.GameEventListenerTest'`
+Expected: PASS (10 tests).
 
-- [ ] **Step 7: Check in game (the user runs this; never automate game input)**
-
-Run: `./gradlew run`, log in following https://github.com/runelite/runelite/wiki/Using-Jagex-Accounts, enable **Yama Reviewer**, and turn on **Capture mode** under Development.
-
-Check:
-1. Do one solo kill. Nothing appears on screen, in chat or as sound during or after it.
-2. A file appears in `~/.runelite/plugin-data/yama-reviewer/raw/` and one in `capture/`.
-3. `capture/<id>.jsonl` starts with a header line (`"entryChoice":"TRAVEL"`) and contains `TickState` lines about 0.6 s apart in tick numbers, `HitsplatObserved` lines and a final `FightEnded` with `YAMA_DIED`.
-4. Teleport out mid-fight in a second attempt: a raw log with `"reason":"LEFT"` appears.
-5. Log out mid-fight in a third attempt: a raw log with `LEFT` appears and it has no END `SuppliesSnapshot`.
-
-- [ ] **Step 8: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/main/java/com/yamareviewer src/test/java/com/yamareviewer/adapter/recording/SnapshotReaderTest.java
-git commit -m "feat: record Yama fights in game and save them when the kill ends"
+git add src/main/java/com/yamareviewer/adapter/recording/GameEventListener.java src/test/java/com/yamareviewer/adapter/recording/GameEventListenerTest.java
+git commit -m "feat: receive RuneLite game events in one listener"
 ```
 
 ---
 
-### Task 9: Architecture rules
+### Task 10: Plugin wiring
+
+**Files:**
+- Modify: `src/main/java/com/yamareviewer/YamaReviewerPlugin.java` (replace the Task 1 skeleton)
+
+**Interfaces:**
+- Consumes: everything from Tasks 1–9.
+- Produces: the wired plugin. It owns the executor, registers `GameEventListener`, and has no `@Subscribe` methods.
+
+- [ ] **Step 1: Wire the plugin**
+
+Replace `src/main/java/com/yamareviewer/YamaReviewerPlugin.java`:
+
+```java
+package com.yamareviewer;
+
+import com.google.gson.Gson;
+import com.google.inject.Provides;
+import com.yamareviewer.adapter.ids.BuiltInIds;
+import com.yamareviewer.adapter.persistence.EventCodec;
+import com.yamareviewer.adapter.persistence.FilepathFileStore;
+import com.yamareviewer.adapter.persistence.GsonLogRepository;
+import com.yamareviewer.adapter.recording.ActorResolver;
+import com.yamareviewer.adapter.recording.EventTranslator;
+import com.yamareviewer.adapter.recording.GameEventListener;
+import com.yamareviewer.adapter.recording.ItemLookup;
+import com.yamareviewer.adapter.recording.ItemManagerLookup;
+import com.yamareviewer.adapter.recording.PositionReader;
+import com.yamareviewer.adapter.recording.SnapshotReader;
+import com.yamareviewer.adapter.recording.TickSampler;
+import com.yamareviewer.application.command.KillSession;
+import com.yamareviewer.application.handler.KillEndedHandler;
+import com.yamareviewer.application.port.LogRepository;
+import com.yamareviewer.domain.ids.IdRegistry;
+import java.time.Clock;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import javax.inject.Inject;
+import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.Client;
+import net.runelite.client.callback.ClientThread;
+import net.runelite.client.config.ConfigManager;
+import net.runelite.client.eventbus.EventBus;
+import net.runelite.client.game.ItemManager;
+import net.runelite.client.game.NpcUtil;
+import net.runelite.client.plugins.Plugin;
+import net.runelite.client.plugins.PluginDescriptor;
+
+/** Composition root: builds the object graph and registers the listener. No game logic lives here. */
+@Slf4j
+@PluginDescriptor(
+	name = "Yama Reviewer",
+	description = "Records Yama kills and reviews them after the kill ends. Silent during the fight.",
+	tags = {"yama", "pvm", "review", "prayer", "duo"},
+	internalName = "yama-reviewer"
+)
+public class YamaReviewerPlugin extends Plugin
+{
+	static final String VERSION = "0.1.0";
+
+	@Inject
+	private Client client;
+
+	@Inject
+	private ClientThread clientThread;
+
+	@Inject
+	private EventBus eventBus;
+
+	@Inject
+	private YamaReviewerConfig config;
+
+	@Inject
+	private Gson gson;
+
+	@Inject
+	private ItemManager itemManager;
+
+	@Inject
+	private NpcUtil npcUtil;
+
+	private ExecutorService executor;
+	private KillSession session;
+	private GameEventListener listener;
+
+	@Provides
+	YamaReviewerConfig provideConfig(ConfigManager configManager)
+	{
+		return configManager.getConfig(YamaReviewerConfig.class);
+	}
+
+	@Override
+	protected void startUp() throws Exception
+	{
+		executor = Executors.newSingleThreadExecutor(runnable ->
+		{
+			Thread thread = new Thread(runnable, "yama-reviewer");
+			thread.setDaemon(true);
+			return thread;
+		});
+		IdRegistry ids = BuiltInIds.registry();
+		LogRepository logs = new GsonLogRepository(new FilepathFileStore(getPluginDirectory()), new EventCodec(gson));
+		KillEndedHandler handler = new KillEndedHandler(executor, logs, config::rawLogsKept);
+		ItemLookup items = new ItemManagerLookup(itemManager);
+
+		session = new KillSession(handler, new SnapshotReader(client, items), Clock.systemUTC(),
+			() -> UUID.randomUUID().toString(), VERSION, ids.fingerprint(), config::captureMode);
+		PositionReader positions = new PositionReader(client);
+		ActorResolver actors = new ActorResolver(client, ids, session::partnerName);
+		EventTranslator translator = new EventTranslator(ids, actors, session::currentTick, config::captureMode, items::name, positions);
+		listener = new GameEventListener(client, ids, session, translator, new TickSampler(client, actors, positions),
+			positions, npcUtil, handler::pending);
+
+		eventBus.register(listener);
+		log.debug("Yama Reviewer started");
+	}
+
+	@Override
+	protected void shutDown()
+	{
+		eventBus.unregister(listener);
+		KillSession ending = session;
+		ExecutorService stopping = executor;
+		clientThread.invoke(() ->
+		{
+			ending.leave();
+			stopping.shutdown();
+		});
+		log.debug("Yama Reviewer stopped");
+	}
+}
+```
+
+`shutdown()` (not `shutdownNow()`) lets a raw log that `leave()` just queued finish in the background; neither call blocks.
+
+- [ ] **Step 2: Run the whole test suite**
+
+Run: `./gradlew test`
+Expected: PASS (all tests so far).
+
+- [ ] **Step 3: Check in game (the user does this; never automate game input)**
+
+Run `./gradlew run`, log in following https://github.com/runelite/runelite/wiki/Using-Jagex-Accounts, and enable **Yama Reviewer**.
+
+Check:
+1. Do one solo kill. Nothing appears on screen, in chat or as sound, during or after it.
+2. A file appears in `~/.runelite/plugin-data/yama-reviewer/raw/`.
+3. `./gradlew captureSummary --args="<that file>"` (Task 12) lists `YAMA` animations and `SELF` hitsplats, and the last line of the log is a `fight-end` with `YAMA_DIED`.
+4. Teleport out mid-fight in a second attempt: a raw log ending in `LEFT` appears.
+5. Log out mid-fight in a third attempt: a raw log ending in `LEFT` appears, without an `END` supplies snapshot.
+6. Disable the plugin mid-fight in a fourth attempt: a raw log ending in `LEFT` appears.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/main/java/com/yamareviewer/YamaReviewerPlugin.java
+git commit -m "feat: wire recording into the plugin"
+```
+
+---
+
+### Task 11: Architecture rules
 
 **Files:**
 - Test: `src/test/java/com/yamareviewer/ArchitectureTest.java`
 
 **Interfaces:**
-- Consumes: the package layout of Tasks 1–8.
+- Consumes: the package layout of Tasks 1–10.
 - Produces: build-failing rules that Parts 2–4 must keep passing.
 
 - [ ] **Step 1: Write the rules**
@@ -4279,8 +5397,12 @@ import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.junit.ArchUnitRunner;
 import com.tngtech.archunit.lang.ArchRule;
-import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
+import net.runelite.client.eventbus.Subscribe;
 import org.junit.runner.RunWith;
+import static com.tngtech.archunit.core.domain.JavaCall.Predicates.target;
+import static com.tngtech.archunit.core.domain.properties.HasName.Predicates.name;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 @RunWith(ArchUnitRunner.class)
 @AnalyzeClasses(packages = "com.yamareviewer", importOptions = ImportOption.DoNotIncludeTests.class)
@@ -4291,28 +5413,47 @@ public class ArchitectureTest
 		.that().resideInAPackage("com.yamareviewer.domain..")
 		.should().dependOnClassesThat().resideInAnyPackage(
 			"com.yamareviewer.application..", "com.yamareviewer.adapter..",
-			"net.runelite..", "com.google.gson..", "javax.swing..");
+			"net.runelite..", "com.google..", "javax.swing..", "java.awt..");
 
 	@ArchTest
 	public static final ArchRule applicationDoesNotKnowAdapters = noClasses()
 		.that().resideInAPackage("com.yamareviewer.application..")
 		.should().dependOnClassesThat().resideInAnyPackage(
-			"com.yamareviewer.adapter..", "net.runelite..", "com.google.gson..", "javax.swing..");
+			"com.yamareviewer.adapter..", "net.runelite..", "com.google..", "javax.swing..", "java.awt..");
+
+	@ArchTest
+	public static final ArchRule onlyRecordingSeesGameEvents = noClasses()
+		.that().resideOutsideOfPackage("com.yamareviewer.adapter.recording..")
+		.should().dependOnClassesThat().resideInAPackage("net.runelite.api.events..");
+
+	@ArchTest
+	public static final ArchRule onlyRecordingSubscribes = methods()
+		.that().areAnnotatedWith(Subscribe.class)
+		.should().beDeclaredInClassesThat().resideInAPackage("com.yamareviewer.adapter.recording..");
 
 	@ArchTest
 	public static final ArchRule recordingNeverReachesOutput = noClasses()
 		.that().resideInAnyPackage(
-			"com.yamareviewer.adapter.recording..", "com.yamareviewer.application.command..", "com.yamareviewer.domain.event..")
-		.should().dependOnClassesThat().resideInAnyPackage(
-			"com.yamareviewer.adapter.publish..", "com.yamareviewer.adapter.ui..");
+			"com.yamareviewer.adapter.recording..", "com.yamareviewer.application.command..", "com.yamareviewer.domain..")
+		.should().dependOnClassesThat().resideInAnyPackage("com.yamareviewer.adapter.publish..", "com.yamareviewer.adapter.ui..")
+		.orShould().dependOnClassesThat().haveSimpleName("ReviewPublisher");
+
+	@ArchTest
+	public static final ArchRule onlyPublishTalksToChat = noClasses()
+		.that().resideOutsideOfPackage("com.yamareviewer.adapter.publish..")
+		.should().dependOnClassesThat().haveFullyQualifiedName("net.runelite.client.chat.ChatMessageManager");
+
+	@ArchTest
+	public static final ArchRule onlyUiAndRootUseSwing = noClasses()
+		.that().resideOutsideOfPackages("com.yamareviewer.adapter.ui..", "com.yamareviewer")
+		.should().dependOnClassesThat().resideInAnyPackage("javax.swing..", "net.runelite.client.ui..");
 
 	@ArchTest
 	public static final ArchRule noLiveCues = noClasses()
-		.should().dependOnClassesThat().haveFullyQualifiedName("net.runelite.client.ui.overlay.Overlay")
-		.orShould().dependOnClassesThat().haveFullyQualifiedName("net.runelite.client.ui.overlay.infobox.InfoBox")
+		.should().dependOnClassesThat().resideInAPackage("net.runelite.client.ui.overlay..")
 		.orShould().dependOnClassesThat().haveFullyQualifiedName("net.runelite.client.Notifier")
-		.orShould().dependOnClassesThat().haveFullyQualifiedName("net.runelite.api.SoundEffectID")
-		.orShould().dependOnClassesThat().resideInAPackage("javax.sound..");
+		.orShould().dependOnClassesThat().resideInAPackage("javax.sound..")
+		.orShould().callMethodWhere(target(name("playSoundEffect")));
 
 	@ArchTest
 	public static final ArchRule noUncheckedFileAccess = noClasses()
@@ -4325,7 +5466,7 @@ public class ArchitectureTest
 - [ ] **Step 2: Run the rules**
 
 Run: `./gradlew test --tests 'com.yamareviewer.ArchitectureTest'`
-Expected: PASS (5 rules). If a rule fails, fix the offending dependency in main code; never weaken the rule.
+Expected: PASS (9 rules). If a rule fails, fix the offending dependency in main code; never weaken a rule.
 
 - [ ] **Step 3: Commit**
 
@@ -4336,17 +5477,17 @@ git commit -m "test: enforce layering and the silent-during-the-fight rule"
 
 ---
 
-### Task 10: Capture summary tool and the logging-kills guide
+### Task 12: Capture tools and the logging-kills guide
 
 **Files:**
-- Create: `src/test/java/com/yamareviewer/tools/CaptureSummary.java`
+- Create: `src/test/java/com/yamareviewer/tools/GamevalNames.java`, `CaptureSummary.java`
 - Test: `src/test/java/com/yamareviewer/tools/CaptureSummaryTest.java`
 - Modify: `build.gradle` (add the `captureSummary` task)
 - Create: `docs/logging-kills.md`
 
 **Interfaces:**
 - Consumes: `EventCodec` (Task 5), events (Task 2).
-- Produces: `CaptureSummary.summarize(List<DomainEvent>) → String`; `./gradlew captureSummary --args="<file>"`.
+- Produces: `CaptureSummary.summarize(List<DomainEvent>, BiFunction<String, Integer, Optional<String>> names)`; `./gradlew captureSummary --args="<raw log .jsonl.gz>"`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4359,22 +5500,24 @@ import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.event.AnimationObserved;
 import com.yamareviewer.domain.event.GraphicObserved;
 import java.util.List;
+import java.util.Optional;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 public class CaptureSummaryTest
 {
 	@Test
-	public void countsIdsPerActorWithTheirMostCommonGap()
+	public void countsIdsPerActorWithTheirMostCommonGapAndGamevalName()
 	{
 		String summary = CaptureSummary.summarize(List.of(
 			new AnimationObserved(0, Actor.YAMA, 42),
 			new AnimationObserved(7, Actor.YAMA, 42),
 			new AnimationObserved(14, Actor.YAMA, 42),
-			new GraphicObserved(5, Actor.SELF, 3247)));
+			new GraphicObserved(5, Actor.SELF, 3247)),
+			(kind, id) -> id == 42 ? Optional.of("NPC_YAMA01_MAGIC01") : Optional.empty());
 
-		assertTrue(summary, summary.contains(String.format("%-40s %6d %6d %6d %6d", "animation YAMA 42", 3, 0, 14, 7)));
-		assertTrue(summary, summary.contains(String.format("%-40s %6d %6d %6d %6s", "graphic SELF 3247", 1, 5, 5, "-")));
+		assertTrue(summary, summary.contains(String.format(CaptureSummary.ROW, "animation", "YAMA", 42, 3, 0, 14, "7", "NPC_YAMA01_MAGIC01")));
+		assertTrue(summary, summary.contains(String.format(CaptureSummary.ROW, "graphic", "SELF", 3247, 1, 5, 5, "-", "")));
 	}
 }
 ```
@@ -4384,7 +5527,70 @@ public class CaptureSummaryTest
 Run: `./gradlew test --tests 'com.yamareviewer.tools.CaptureSummaryTest'`
 Expected: FAIL — `cannot find symbol: class CaptureSummary`.
 
-- [ ] **Step 3: Write `CaptureSummary`**
+- [ ] **Step 3: Write the tools**
+
+`src/test/java/com/yamareviewer/tools/GamevalNames.java`:
+
+```java
+package com.yamareviewer.tools;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
+import net.runelite.api.gameval.AnimationID;
+import net.runelite.api.gameval.NpcID;
+import net.runelite.api.gameval.ObjectID;
+import net.runelite.api.gameval.ObjectID1;
+import net.runelite.api.gameval.SpotanimID;
+
+/** Development tool only (test source set, never shipped): gameval constant names by kind and id. */
+final class GamevalNames
+{
+	private final Map<String, Map<Integer, String>> byKind = new HashMap<>();
+
+	GamevalNames()
+	{
+		Map<Integer, String> animations = namesOf(AnimationID.class);
+		Map<Integer, String> spotanims = namesOf(SpotanimID.class);
+		Map<Integer, String> objects = new HashMap<>(namesOf(ObjectID.class));
+		objects.putAll(namesOf(ObjectID1.class));
+		byKind.put("animation", animations);
+		byKind.put("object-animation", animations);
+		byKind.put("graphic", spotanims);
+		byKind.put("ground-graphic", spotanims);
+		byKind.put("projectile", spotanims);
+		byKind.put("npc", namesOf(NpcID.class));
+		byKind.put("object", objects);
+	}
+
+	Optional<String> name(String kind, int id)
+	{
+		return Optional.ofNullable(byKind.getOrDefault(kind, Map.of()).get(id));
+	}
+
+	private static Map<Integer, String> namesOf(Class<?> constants)
+	{
+		Map<Integer, String> names = new HashMap<>();
+		for (Field field : constants.getFields())
+		{
+			if (Modifier.isStatic(field.getModifiers()) && field.getType() == int.class)
+			{
+				try
+				{
+					names.putIfAbsent(field.getInt(null), field.getName());
+				}
+				catch (IllegalAccessException e)
+				{
+					throw new IllegalStateException(e);
+				}
+			}
+		}
+		return names;
+	}
+}
+```
 
 `src/test/java/com/yamareviewer/tools/CaptureSummary.java`:
 
@@ -4396,15 +5602,19 @@ import com.yamareviewer.adapter.persistence.EventCodec;
 import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.event.AnimationObserved;
 import com.yamareviewer.domain.event.DomainEvent;
+import com.yamareviewer.domain.event.GameMessageObserved;
 import com.yamareviewer.domain.event.GraphicObserved;
 import com.yamareviewer.domain.event.GroundGraphicObserved;
 import com.yamareviewer.domain.event.HitsplatObserved;
 import com.yamareviewer.domain.event.NpcSpawnObserved;
+import com.yamareviewer.domain.event.ObjectAnimationObserved;
 import com.yamareviewer.domain.event.ObjectSpawnObserved;
 import com.yamareviewer.domain.event.OverheadTextObserved;
 import com.yamareviewer.domain.event.ProjectileObserved;
-import com.yamareviewer.domain.event.ScriptObserved;
+import com.yamareviewer.domain.event.VarbitObserved;
+import com.yamareviewer.domain.event.WidgetTextObserved;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -4412,45 +5622,61 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
+import java.util.function.BiFunction;
+import java.util.zip.GZIPInputStream;
 
-/** Development tool: which IDs appeared in a capture file, how often, and at what rhythm. */
+/** Development tool: which IDs appeared in a raw log, how often, at what rhythm, and their gameval names. */
 public final class CaptureSummary
 {
+	static final String ROW = "%-16s %-18s %9d %6d %6d %6d %5s  %s%n";
+
 	public static void main(String[] args) throws IOException
 	{
 		if (args.length != 1)
 		{
-			System.err.println("Usage: ./gradlew captureSummary --args=\"<path to capture .jsonl>\"");
+			System.err.println("Usage: ./gradlew captureSummary --args=\"<path to raw/*.jsonl.gz>\"");
 			System.exit(1);
 		}
-		EventCodec codec = new EventCodec(new Gson());
-		List<String> lines = Files.readAllLines(Path.of(args[0]), StandardCharsets.UTF_8);
-		List<DomainEvent> events = new ArrayList<>();
-		for (String line : lines.subList(1, lines.size()))
+		String text;
+		try (InputStream in = new GZIPInputStream(Files.newInputStream(Path.of(args[0]))))
 		{
-			if (!line.isBlank())
+			text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+		}
+		EventCodec codec = new EventCodec(new Gson());
+		String[] lines = text.split("\n");
+		List<DomainEvent> events = new ArrayList<>();
+		for (int i = 1; i < lines.length; i++)
+		{
+			if (!lines[i].isBlank())
 			{
-				codec.decode(line).ifPresent(events::add);
+				codec.decode(lines[i]).ifPresent(events::add);
 			}
 		}
-		System.out.print(summarize(events));
+		GamevalNames names = new GamevalNames();
+		System.out.print(summarize(events, names::name));
 	}
 
-	static String summarize(List<DomainEvent> events)
+	static String summarize(List<DomainEvent> events, BiFunction<String, Integer, Optional<String>> names)
 	{
-		Map<String, List<Integer>> ticksByKey = new TreeMap<>();
+		Map<String, Row> rows = new TreeMap<>();
 		for (DomainEvent event : events)
 		{
-			String key = keyOf(event);
+			Row key = keyOf(event);
 			if (key != null)
 			{
-				ticksByKey.computeIfAbsent(key, k -> new ArrayList<>()).add(event.getTick());
+				rows.computeIfAbsent(key.sortKey(), k -> key).ticks.add(event.getTick());
 			}
 		}
-		StringBuilder out = new StringBuilder(String.format("%-40s %6s %6s %6s %6s%n", "event actor id", "count", "first", "last", "gap"));
-		ticksByKey.forEach((key, ticks) -> out.append(String.format("%-40s %6d %6d %6d %6s%n",
-			key, ticks.size(), ticks.get(0), ticks.get(ticks.size() - 1), mostCommonGap(ticks))));
+		StringBuilder out = new StringBuilder(String.format("%-16s %-18s %9s %6s %6s %6s %5s  %s%n",
+			"event", "actor", "id", "count", "first", "last", "gap", "gameval"));
+		for (Row row : rows.values())
+		{
+			List<Integer> ticks = row.ticks;
+			out.append(String.format(ROW, row.kind, row.actor, row.id, ticks.size(), ticks.get(0),
+				ticks.get(ticks.size() - 1), mostCommonGap(ticks), names.apply(row.kind, row.id).orElse("")));
+		}
 		return out.toString();
 	}
 
@@ -4467,48 +5693,64 @@ public final class CaptureSummary
 			.orElse("-");
 	}
 
-	private static String keyOf(DomainEvent event)
+	private static Row keyOf(DomainEvent event)
 	{
 		if (event instanceof AnimationObserved)
 		{
 			AnimationObserved e = (AnimationObserved) event;
-			return "animation " + label(e.getActor()) + " " + e.getAnimationId();
+			return new Row("animation", label(e.getActor()), e.getAnimationId());
 		}
 		if (event instanceof GraphicObserved)
 		{
 			GraphicObserved e = (GraphicObserved) event;
-			return "graphic " + label(e.getActor()) + " " + e.getGraphicId();
+			return new Row("graphic", label(e.getActor()), e.getGraphicId());
 		}
 		if (event instanceof GroundGraphicObserved)
 		{
-			return "ground-graphic " + ((GroundGraphicObserved) event).getGraphicId();
+			return new Row("ground-graphic", "-", ((GroundGraphicObserved) event).getGraphicId());
 		}
 		if (event instanceof ProjectileObserved)
 		{
 			ProjectileObserved e = (ProjectileObserved) event;
-			return "projectile " + e.getProjectileId() + " -> " + label(e.getTarget());
+			return new Row("projectile", "-> " + label(e.getTarget()), e.getProjectileId());
 		}
 		if (event instanceof NpcSpawnObserved)
 		{
-			return "npc " + ((NpcSpawnObserved) event).getNpcId();
+			NpcSpawnObserved e = (NpcSpawnObserved) event;
+			return new Row("npc", label(e.getActor()), e.getNpcId());
 		}
 		if (event instanceof ObjectSpawnObserved)
 		{
-			return "object " + ((ObjectSpawnObserved) event).getObjectId();
+			return new Row("object", "-", ((ObjectSpawnObserved) event).getObjectId());
 		}
-		if (event instanceof ScriptObserved)
+		if (event instanceof ObjectAnimationObserved)
 		{
-			return "script " + ((ScriptObserved) event).getScriptId();
+			ObjectAnimationObserved e = (ObjectAnimationObserved) event;
+			return new Row("object-animation", "object " + e.getObjectId(), e.getAnimationId());
+		}
+		if (event instanceof VarbitObserved)
+		{
+			VarbitObserved e = (VarbitObserved) event;
+			return new Row("varbit", "value " + e.getValue(), e.getVarbitId());
 		}
 		if (event instanceof OverheadTextObserved)
 		{
 			OverheadTextObserved e = (OverheadTextObserved) event;
-			return "overhead " + label(e.getActor()) + " \"" + e.getText() + "\"";
+			return new Row("overhead", label(e.getActor()) + " " + e.getText(), 0);
+		}
+		if (event instanceof GameMessageObserved)
+		{
+			return new Row("game-message", ((GameMessageObserved) event).getText(), 0);
+		}
+		if (event instanceof WidgetTextObserved)
+		{
+			WidgetTextObserved e = (WidgetTextObserved) event;
+			return new Row("widget-text", e.getText(), e.getComponentId());
 		}
 		if (event instanceof HitsplatObserved)
 		{
 			HitsplatObserved e = (HitsplatObserved) event;
-			return "hitsplat " + label(e.getTarget()) + " type " + e.getRawType();
+			return new Row("hitsplat", label(e.getTarget()), e.getRawType());
 		}
 		return null;
 	}
@@ -4524,6 +5766,26 @@ public final class CaptureSummary
 			return actor.getKind() + "(" + actor.getName() + ")";
 		}
 		return actor.getRef() >= 0 ? actor.getKind() + "(" + actor.getRef() + ")" : actor.getKind().toString();
+	}
+
+	private static final class Row
+	{
+		private final String kind;
+		private final String actor;
+		private final int id;
+		private final List<Integer> ticks = new ArrayList<>();
+
+		private Row(String kind, String actor, int id)
+		{
+			this.kind = kind;
+			this.actor = actor;
+			this.id = id;
+		}
+
+		private String sortKey()
+		{
+			return kind + "|" + actor + "|" + String.format("%09d", id);
+		}
 	}
 }
 ```
@@ -4551,43 +5813,58 @@ Expected: PASS (1 test).
 ```markdown
 # Logging kills
 
-Four kills with capture mode on give the IDs that Parts 3 and 4 need.
-Only you can do this: never automate game input.
+Five kills with capture mode on confirm the ID mappings, the phase signals and the prayer-check tick
+that Parts 2–4 rely on. Only you can do this: never automate game input.
 
 ## Setup
 
 1. `./gradlew run`, then log in following https://github.com/runelite/runelite/wiki/Using-Jagex-Accounts.
 2. Enable **Yama Reviewer**. Under **Development**, turn on **Capture mode**.
+3. Write down the real-world time when you do each deliberate action below.
 
-## The four kills
+## The kills
 
-| Kill | Mode | Do deliberately, and note the rough time |
+| Kill | Mode | Do deliberately |
 | --- | --- | --- |
-| 1 | Solo (Travel) | Pray correctly all of P3. Use every spec weapon you own at least once. |
-| 2 | Solo (Travel) | In P3: switch one prayer a tick late, pray the wrong style once, walk into one Shadow Crash, let one flare explode, stand next to Yama once to get meleed. |
-| 3 | Duo host (Travel, partner joins) | Normal kill. Note who Yama targets in P3. |
+| 1 | Solo (Travel) | Pray correctly all of P3. Use every spec weapon you own at least once, including a purging staff spec on a flare. |
+| 2 | Solo (Travel) | In P3: switch one prayer on the tick Yama casts, one on the tick the hit lands, pray the wrong style once, walk into one Shadow Crash line, get hit by one Shadow Wave, let one flare explode, stand next to Yama once to get meleed. Get hit by a Judge fire surge. |
+| 3 | Duo host (Travel, partner joins after you) | Normal kill. Note who Yama targets in P3. |
 | 4 | Duo joiner (Join) | Normal kill. |
+| 5 | Any mode, under a contract | Normal kill. Note the contract's name. |
 
-Files land in `~/.runelite/plugin-data/yama-reviewer/capture/<killId>.jsonl`.
+Raw logs land in `~/.runelite/plugin-data/yama-reviewer/raw/`. Copy the five files somewhere safe right
+after each kill: only the newest 20 are kept.
 
-## Reading a capture
+## Reading a log
 
-    ./gradlew captureSummary --args="$HOME/.runelite/plugin-data/yama-reviewer/capture/<killId>.jsonl"
+    ./gradlew captureSummary --args="$HOME/.runelite/plugin-data/yama-reviewer/raw/<file>.jsonl.gz"
 
-Each row is one kind of event on one actor with one ID, with its count, first and last tick and its most common gap.
+Each row is one kind of event on one actor with one ID: count, first and last tick, most common gap,
+and the gameval name when the ID has one. Check against spec section 5.5:
 
-- `YAMA_STANDARD_ATTACK`: a `YAMA` animation with gap 7 whose count is about the P3 length divided by 7.
-- `P3_MAGIC_ON_PLAYER` / `P3_RANGED_ON_PLAYER`: two `SELF` graphics that alternate, each with gap 14.
-- `SHADOW_CRASH`: ground graphics or graphics that come in threes.
-- `FLARE_EXPLOSION`: a graphic near a `FLARE(n)` despawn, followed by a heal hitsplat on `YAMA`.
-- Spec animations: `SELF` animations on the tick your spec energy drops (see `TickState.specEnergy`).
-- Compare every candidate with the gameval hints table in spec section 5.5.
+- **Attacks:** a `YAMA` animation with gap 8 before P3 and 7 in P3 (`YAMA_STANDARD_ATTACK`), and two
+  `YAMA` graphics that alternate (`YAMA_CAST_MAGIC`/`_RANGED`), each followed by an impact graphic on
+  `SELF` or `PARTNER`.
+- **Prayer-check tick:** in kill 2, which of the two deliberate switches was scored as blocked decides
+  `prayerCheck` (`CAST` or `HITSPLAT`).
+- **Phases:** which of `varbit` `YAMA_TRANSITION_PHASE`, the overhead lines, the transition graphic and
+  the Judge spawn fire at each Judge.
+- **Glyphs:** whether glyphs appear as `object` spawns or only as `object-animation` rows, and which
+  object ID is fire and which is shadow.
+- **Crash lines:** ground graphics that come in groups of three on the same tick (`CRASH_FIREBALL`).
+- **Still to capture:** the purging staff spec animation (`SELF` animation when you spec a flare) and
+  the Judge fire surge NPC (`npc` row during a Judge phase).
+- **Messages:** `game-message` rows: the Shadow Wave message "You've been injured and can't use
+  protection prayers!" and the "Yama conjures" glyph message (purple for shadow, orange for fire).
+- **Contract:** the `widget-text` row with the contract name, and an `inventory` event with change -1
+  for the contract item at tick 0 (`zcat <file> | grep inventory`).
 
-## After the logging kills
+## Afterwards
 
-1. Fill the matching roles in `src/main/resources/com/yamareviewer/ids.json` and raise `"version"` by 1.
-2. Set `timing.prayerCheck` and `prayerCheckOffset` from kill 2 (which tick decided the late switch).
-3. Copy the four capture files to `src/test/resources/fixtures/` for the golden tests in Part 3.
+1. Correct any mapping in `src/main/java/com/yamareviewer/adapter/ids/BuiltInIds.java` that the logs
+   contradict, and fill the three roles still to capture.
+2. Set `Rules.DEFAULT.prayerCheck` from kill 2.
+3. Copy the five logs to `src/test/resources/fixtures/` for the golden tests in Part 3.
 ```
 
 - [ ] **Step 7: Commit**
@@ -4601,8 +5878,8 @@ git commit -m "feat: add the capture summary tool and the logging-kills guide"
 
 ## Self-Review
 
-**Spec coverage (Part 1 of section 13):** project setup (Task 1); domain events of 5.1 (Task 2, plus `PartnerSeen`, `GroundGraphicObserved`); `KillLog`/header/storage of 5.2 (Tasks 2, 5); fight lifecycle 5.3 (Tasks 4, 8); `IdRegistry` + `ids.json` 5.5 (Task 3); capture mode (Tasks 5, 6, 8, 10); silence tests 4.4 (Task 9; the "publisher untouched until FightEnded" test moves to Part 2 where a publisher exists); threading 4.5 (Tasks 6, 8); error handling 11 for storage (Tasks 5, 6). Mode detection (5.4) and everything in sections 6–9 are Parts 2–4.
+**Spec coverage (spec 13, part 1):** project setup (Task 1); domain events and stable type names of 5.1 (Task 2); roles, tunables and `gameval` built-in IDs of 5.5 (Task 3); fight lifecycle of 5.3 with the end completed on the next tick (Tasks 4, 9); raw log storage and schema policy of 5.2 (Task 5); the plugin executor and client-shutdown wait of 4.5 (Tasks 6, 9, 10); the anti-corruption layer (Tasks 7, 9); priced snapshots on the client thread (Task 8); the ArchUnit rules of 4.4 (Task 11); capture mode and the tools of 12 (Tasks 7, 12). The replay silence test through `GameEventListener` needs a `ReviewPublisher`, so it is in Part 2. Mode detection (5.4) and sections 6–9 are Parts 2–4.
 
-**Deviations from the spec to fold back into it:** the events `NpcSpawned`, `NpcDespawned`, `ObjectSpawned` are named `NpcSpawnObserved`, `NpcDespawnObserved`, `ObjectSpawnObserved` (RuneLite has classes with the old names); `PartnerSeen` is added; the commands are `KillSession` methods rather than command classes; ground graphics, projectiles and objects are recorded without an ID filter so self-healing can find renumbered IDs.
+**Placeholders:** none; the four roles with no built-in value are named in `BuiltInIds` and asserted in `BuiltInIdsTest`.
 
-**Type consistency:** `KillEndedListener.killEnded(KillLog)`, `SnapshotSource.take(int, SnapshotKind)`, `LogRepository` signatures and `EventTranslator.aggregate(Item[])` are used identically in Tasks 4–8.
+**Type consistency:** `KillEndedListener.killEnded(KillLog)`, `SnapshotSource.take(int, SnapshotKind)`, `LogRepository` (`save`, `loadAll`, `prune`), `FightStart(selfName, selfPosition, playersPresent)`, `PositionReader.position/regionId`, `EventTranslator.aggregate(Item[])` and `KillEndedHandler.pending()` are used identically in Tasks 4–12.
