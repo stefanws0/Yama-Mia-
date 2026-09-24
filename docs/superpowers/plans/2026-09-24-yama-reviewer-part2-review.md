@@ -6326,3 +6326,3456 @@ git commit -m "feat: derive per-mode-and-contract history with averages, bests a
 ```
 
 ---
+### Task 14: Text: ReviewFormatter, ChatLines, ClipboardExport, HistoryFormatter and the replay tool
+
+**Files:**
+- Create in `src/main/java/com/yamareviewer/domain/text/`: `Formats.java`, `ViewSection.java`, `ReviewView.java`, `ReviewFormatter.java`, `ChatLineOptions.java`, `ChatLines.java`, `ClipboardExport.java`, `HistoryFormatter.java`
+- Create: `src/test/java/com/yamareviewer/tools/Replay.java`
+- Modify: `build.gradle` (add the `replay` task, bump `version` to `0.2.0`)
+- Test: `src/test/java/com/yamareviewer/domain/text/FormatsTest.java`, `ReviewFormatterTest.java`, `ChatLinesTest.java`, `ClipboardExportTest.java`, `HistoryFormatterTest.java`, `src/test/java/com/yamareviewer/tools/ReplayTest.java`
+
+**Interfaces:**
+- Consumes: `KillReview` and the result types (Task 3), `HistoryView`, `KillSummary`, `Trend` (Task 13), `Projections`, `KillReviewAssembler` (Task 12), `EventCodec` (Part 1 Task 5), `BuiltInIds` (Part 1 Task 3), `Reviews` (Task 3).
+- Produces: `Formats.duration(int ticks)` ("4:12"), `gp(long)` ("318,450"), `compactGp(long)` ("318k", "1.25M"), `percent(double)`, `date(long epochMs)`, `trend(Trend, boolean lowerIsBetter)` ("↓ improving", "↑ declining", "→ steady", ""); `ViewSection(title, lines, hiddenReason)`; `ReviewView(headline, status, sections)`; `ReviewFormatter.format(KillReview)` plus public helpers `headline`, `modeAndContract`, `status`, `section(title, Section, Function)` (Part 3 adds its sections in `format`); `ChatLineOptions(phaseLine, prayerLine, flareLine, specLine, deathRecap)`; `ChatLines.lines(KillReview, ChatLineOptions)` (Part 3 fills lines 2 and 4); `ClipboardExport.text(KillReview)`; `HistoryFormatter.summaryLines(HistoryView)`, `killLine(KillSummary)`; `Replay.review(KillLog, IdRegistry)`, `Replay.read(Path)`, `Replay.text(ReviewView)`, `./gradlew replay --args="<raw log> [--json]"`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`src/test/java/com/yamareviewer/domain/text/FormatsTest.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.history.Trend;
+import static org.junit.Assert.assertEquals;
+import org.junit.Test;
+
+public class FormatsTest
+{
+	@Test
+	public void durationsRoundTicksToSeconds()
+	{
+		assertEquals("4:12", Formats.duration(420));
+		assertEquals("1:05", Formats.duration(108));
+		assertEquals("0:00", Formats.duration(0));
+		assertEquals("10:00", Formats.duration(1000));
+	}
+
+	@Test
+	public void goldFormats()
+	{
+		assertEquals("318,450", Formats.gp(318_450));
+		assertEquals("450", Formats.compactGp(450));
+		assertEquals("318k", Formats.compactGp(318_450));
+		assertEquals("1M", Formats.compactGp(1_000_000));
+		assertEquals("1.25M", Formats.compactGp(1_250_000));
+		assertEquals("2.5M", Formats.compactGp(2_500_000));
+		assertEquals("89%", Formats.percent(0.894));
+	}
+
+	@Test
+	public void trendsArrowsUseATwoPercentBand()
+	{
+		assertEquals("↓ improving", Formats.trend(new Trend(250.0, 260.0), true));
+		assertEquals("↑ declining", Formats.trend(new Trend(270.0, 260.0), true));
+		assertEquals("→ steady", Formats.trend(new Trend(261.0, 260.0), true));
+		assertEquals("↑ improving", Formats.trend(new Trend(0.9, 0.8), false));
+		assertEquals("", Formats.trend(new Trend(0.9, null), false));
+		assertEquals("", Formats.trend(null, false));
+	}
+
+	@Test
+	public void datesHaveMinutePrecision()
+	{
+		assertEquals(16, Formats.date(1_700_000_000_000L).length());
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/domain/text/ReviewFormatterTest.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.model.Contract;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.review.DamageSource;
+import com.yamareviewer.domain.review.DeathRecap;
+import com.yamareviewer.domain.review.HiddenReason;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.review.RecapHit;
+import com.yamareviewer.domain.review.RecapTick;
+import com.yamareviewer.domain.review.ReviewStatus;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.testing.Reviews;
+import java.util.List;
+import static java.util.stream.Collectors.toList;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import org.junit.Test;
+
+public class ReviewFormatterTest
+{
+	private static ViewSection section(ReviewView view, String title)
+	{
+		return view.getSections().stream().filter(section -> section.getTitle().equals(title)).findFirst().get();
+	}
+
+	@Test
+	public void headlineStatusAndSectionOrder()
+	{
+		ReviewView view = ReviewFormatter.format(Reviews.builder("k", 1L, Mode.DUO_HOST, Contract.BLOODIED_BLOWS).build());
+
+		assertEquals("Yama (duo host, Bloodied Blows) 4:12", view.getHeadline());
+		assertEquals("Complete", view.getStatus());
+		assertEquals(List.of("Phases", "Damage taken", "Flares", "Supplies"),
+			view.getSections().stream().map(ViewSection::getTitle).collect(toList()));
+	}
+
+	@Test
+	public void phaseDamageFlareAndSupplyLines()
+	{
+		ReviewView view = ReviewFormatter.format(Reviews.builder("k", 1L, Mode.DUO_HOST, Contract.NONE).build());
+
+		assertEquals(List.of("P1 1:05 (108 ticks)", "Judge 1 0:19 (32 ticks)", "P2 1:10 (117 ticks)", "Judge 2 0:14 (23 ticks)",
+			"P3 1:24 (140 ticks)", "Total 4:12 (420 ticks)"), section(view, "Phases").getLines());
+		assertEquals(List.of("You: 212", "  P1 22 · P3 190", "  Melee 22", "  Flare explosions 190",
+			"Partner: 188", "  P3 188", "  Other 188", "Shared mechanics: 190"), section(view, "Damage taken").getLines());
+		assertEquals(List.of("Spawned 6, killed 5, exploded 1", "Yama healed 30", "Wave 1 (summoned): 2 flares, 30 ticks",
+			"Wave 2 (summoned): 4 flares, 30 ticks"), section(view, "Flares").getLines());
+		assertEquals(List.of("Shark x2: 1,600", "Super restore 6 doses: 316,850", "Total: 318,450 (Grand Exchange)"),
+			section(view, "Supplies").getLines());
+		assertNull(section(view, "Supplies").getHiddenReason());
+	}
+
+	@Test
+	public void soloReviewsHaveNoPartnerLines()
+	{
+		ReviewView view = ReviewFormatter.format(Reviews.sample());
+
+		assertEquals(List.of("You: 212", "  P1 22 · P3 190", "  Melee 22", "  Flare explosions 190", "Shared mechanics: 190"),
+			section(view, "Damage taken").getLines());
+		assertEquals("Yama (solo) 4:12", view.getHeadline());
+	}
+
+	@Test
+	public void hiddenSectionsShowTheirReasonAndMakeTheStatusIncomplete()
+	{
+		KillReview review = Reviews.sample().toBuilder()
+			.flares(Section.hidden(HiddenReason.IDS_NOT_CAPTURED))
+			.phases(Section.hidden(HiddenReason.ERROR))
+			.build()
+			.withRecomputedStatus();
+
+		ReviewView view = ReviewFormatter.format(review);
+
+		assertEquals("Incomplete", view.getStatus());
+		assertEquals("Yama (solo) n/a", view.getHeadline());
+		assertEquals("IDs not captured", section(view, "Flares").getHiddenReason());
+		assertEquals(List.of(), section(view, "Flares").getLines());
+		assertEquals("Error while reviewing", section(view, "Phases").getHiddenReason());
+	}
+
+	@Test
+	public void aDeathPutsTheRecapFirstWithItsTicks()
+	{
+		KillReview review = Reviews.builder("k", 1L, Mode.SOLO, Contract.FORFEIT_BREATH)
+			.endReason(EndReason.PLAYER_DIED)
+			.deathRecap(Section.ok(new DeathRecap(List.of(
+				new RecapTick(419, List.of(new RecapHit(DamageSource.MELEE, 22)), 12, 5, 3, "you", List.of("Shark")),
+				new RecapTick(420, List.of(), 0, 5, 0, "partner", List.of())), true)))
+			.build();
+
+		ReviewView view = ReviewFormatter.format(review);
+
+		assertEquals("Yama (solo, Forfeit Breath) died in P3 at 4:12", view.getHeadline());
+		assertEquals("Death recap", view.getSections().get(0).getTitle());
+		assertEquals(List.of(
+			"Tick 419: HP 12, prayer 5, run 3%, Yama targets you, hit 22 (Melee), used Shark",
+			"Tick 420: HP 0, prayer 5, run 0%, Yama targets partner",
+			"Died out of run energy"), view.getSections().get(0).getLines());
+	}
+
+	@Test
+	public void aLeftKillSaysWhereItStopped()
+	{
+		KillReview review = Reviews.sample().toBuilder().endReason(EndReason.LEFT).status(ReviewStatus.COMPLETE).build();
+
+		assertEquals("Yama (solo) left in P3 at 4:12", ReviewFormatter.format(review).getHeadline());
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/domain/text/ChatLinesTest.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.model.Contract;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.review.DamageSource;
+import com.yamareviewer.domain.review.DeathRecap;
+import com.yamareviewer.domain.review.HiddenReason;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.review.RecapHit;
+import com.yamareviewer.domain.review.RecapTick;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.testing.Reviews;
+import java.util.List;
+import static org.junit.Assert.assertEquals;
+import org.junit.Test;
+
+public class ChatLinesTest
+{
+	private static final ChatLineOptions ALL = new ChatLineOptions(true, true, true, true, true);
+
+	@Test
+	public void theFourLinesOfSpec72()
+	{
+		KillReview review = Reviews.builder("k", 1L, Mode.DUO_HOST, Contract.BLOODIED_BLOWS).build();
+
+		assertEquals(List.of(
+			"Yama (duo host, Bloodied Blows) 4:12. P1 1:05, P2 1:10, P3 1:24.",
+			"P3 prayers n/a. Crash lines n/a. Waves n/a.",
+			"Flares 5/6 killed. Damage taken 212 (partner 188).",
+			"Specs n/a. Supplies 318k."), ChatLines.lines(review, ALL));
+	}
+
+	@Test
+	public void soloAndNoContract()
+	{
+		List<String> lines = ChatLines.lines(Reviews.sample(), ALL);
+
+		assertEquals("Yama (solo) 4:12. P1 1:05, P2 1:10, P3 1:24.", lines.get(0));
+		assertEquals("Flares 5/6 killed. Damage taken 212.", lines.get(2));
+	}
+
+	@Test
+	public void unknownContractIsNamedAsSuch()
+	{
+		KillReview review = Reviews.builder("k", 1L, Mode.SOLO, Contract.UNKNOWN_CONTRACT).build();
+
+		assertEquals("Yama (solo, unknown contract) 4:12. P1 1:05, P2 1:10, P3 1:24.", ChatLines.lines(review, ALL).get(0));
+	}
+
+	@Test
+	public void eachLineCanBeSwitchedOff()
+	{
+		KillReview review = Reviews.sample();
+
+		assertEquals(List.of("Specs n/a. Supplies 318k."), ChatLines.lines(review, new ChatLineOptions(false, false, false, true, false)));
+		assertEquals(List.of(), ChatLines.lines(review, new ChatLineOptions(false, false, false, false, true)));
+	}
+
+	@Test
+	public void hiddenValuesPrintAsNotAvailable()
+	{
+		KillReview review = Reviews.sample().toBuilder()
+			.phases(Section.hidden(HiddenReason.HEALTH_CHECK_FAILED))
+			.flares(Section.hidden(HiddenReason.IDS_NOT_CAPTURED))
+			.damage(Section.hidden(HiddenReason.ERROR))
+			.supplies(Section.hidden(HiddenReason.NOT_APPLICABLE))
+			.build();
+
+		assertEquals(List.of(
+			"Yama (solo) n/a.",
+			"P3 prayers n/a. Crash lines n/a. Waves n/a.",
+			"Flares n/a. Damage taken n/a.",
+			"Specs n/a. Supplies n/a."), ChatLines.lines(review, ALL));
+	}
+
+	@Test
+	public void theDeathRecapBlockFollowsWhenEnabledAndPresent()
+	{
+		KillReview review = Reviews.sample().toBuilder()
+			.endReason(EndReason.PLAYER_DIED)
+			.deathRecap(Section.ok(new DeathRecap(List.of(
+				new RecapTick(420, List.of(new RecapHit(DamageSource.FLARE, 45)), 0, 5, null, "you", List.of())), false)))
+			.build();
+
+		List<String> lines = ChatLines.lines(review, ALL);
+
+		assertEquals("Yama (solo) died in P3 at 4:12. P1 1:05, P2 1:10, P3 1:24.", lines.get(0));
+		assertEquals(List.of("Death recap:", "Tick 420: HP 0, prayer 5, Yama targets you, hit 45 (Flare explosions)"), lines.subList(4, 6));
+		assertEquals(4, ChatLines.lines(review, new ChatLineOptions(true, true, true, true, false)).size());
+		assertEquals(4, ChatLines.lines(Reviews.sample(), ALL).size());
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/domain/text/ClipboardExportTest.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.review.DeathRecap;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.review.RecapTick;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.testing.Reviews;
+import java.util.List;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import org.junit.Test;
+
+public class ClipboardExportTest
+{
+	@Test
+	public void chatLinesThenSuppliesThenTheRecap()
+	{
+		KillReview review = Reviews.sample().toBuilder()
+			.endReason(EndReason.PLAYER_DIED)
+			.deathRecap(Section.ok(new DeathRecap(List.of(new RecapTick(420, List.of(), 0, 5, null, "you", List.of())), false)))
+			.build();
+
+		String text = ClipboardExport.text(review);
+
+		assertEquals(String.join("\n",
+			"Yama (solo) died in P3 at 4:12. P1 1:05, P2 1:10, P3 1:24.",
+			"P3 prayers n/a. Crash lines n/a. Waves n/a.",
+			"Flares 5/6 killed. Damage taken 212.",
+			"Specs n/a. Supplies 318k.",
+			"",
+			"Supplies",
+			"Shark x2: 1,600",
+			"Super restore 6 doses: 316,850",
+			"Total: 318,450 (Grand Exchange)",
+			"",
+			"Death recap",
+			"Tick 420: HP 0, prayer 5, Yama targets you"), text);
+	}
+
+	@Test
+	public void noRecapBlockWithoutADeathAndNoNames()
+	{
+		String text = ClipboardExport.text(Reviews.sample());
+
+		assertFalse(text.contains("Death recap"));
+		assertTrue(text.endsWith("Total: 318,450 (Grand Exchange)"));
+		assertFalse(text.contains("Me"));
+		assertFalse(text.contains("Buddy"));
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/domain/text/HistoryFormatterTest.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.history.HistoryKey;
+import com.yamareviewer.domain.history.HistoryView;
+import com.yamareviewer.domain.history.KillSummary;
+import com.yamareviewer.domain.history.Trend;
+import com.yamareviewer.domain.model.Contract;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.review.ReviewStatus;
+import java.util.List;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import org.junit.Test;
+
+public class HistoryFormatterTest
+{
+	private static KillSummary kill(String id, int ticks, EndReason endReason, ReviewStatus status, Long cost)
+	{
+		return KillSummary.builder().killId(id).startEpochMs(1_700_000_000_000L).killTicks(ticks).endReason(endReason).status(status).cost(cost).build();
+	}
+
+	@Test
+	public void summaryLinesWithStatisticsAndTrends()
+	{
+		HistoryView view = new HistoryView(new HistoryKey(Mode.SOLO, Contract.NONE),
+			List.of(kill("a", 420, EndReason.YAMA_DIED, ReviewStatus.COMPLETE, 318_450L), kill("b", 400, EndReason.YAMA_DIED, ReviewStatus.COMPLETE, 200_000L)),
+			410.0, null, 259_225.0, 400, null,
+			new Trend(410.0, 430.0), new Trend(null, null), new Trend(259_225.0, 260_000.0), new Trend(null, null));
+
+		assertEquals(List.of(
+			"2 kills",
+			"Kill time: avg 4:06, best 4:00 ↓ improving",
+			"P3 accuracy: n/a",
+			"Cost per kill: avg 259k → steady",
+			"Defence drained: n/a"), HistoryFormatter.summaryLines(view));
+	}
+
+	@Test
+	public void anEmptyViewSaysSo()
+	{
+		HistoryView view = new HistoryView(new HistoryKey(Mode.SOLO, Contract.NONE), List.of(), null, null, null, null, null,
+			new Trend(null, null), new Trend(null, null), new Trend(null, null), new Trend(null, null));
+
+		assertEquals(List.of("No kills yet"), HistoryFormatter.summaryLines(view));
+	}
+
+	@Test
+	public void killLinesShowTimeOutcomeAndCost()
+	{
+		assertTrue(HistoryFormatter.killLine(kill("a", 420, EndReason.YAMA_DIED, ReviewStatus.COMPLETE, 318_450L)).endsWith(" · 4:12 · complete · 318k"));
+		assertTrue(HistoryFormatter.killLine(kill("b", 420, EndReason.YAMA_DIED, ReviewStatus.INCOMPLETE, null)).endsWith(" · 4:12 · incomplete"));
+		assertTrue(HistoryFormatter.killLine(kill("c", 300, EndReason.PLAYER_DIED, ReviewStatus.COMPLETE, 1_000L)).endsWith(" · 3:00 · died · 1k"));
+		assertTrue(HistoryFormatter.killLine(kill("d", -1, EndReason.LEFT, ReviewStatus.COMPLETE, null)).endsWith(" · n/a · left"));
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/tools/ReplayTest.java`:
+
+```java
+package com.yamareviewer.tools;
+
+import com.google.gson.Gson;
+import com.yamareviewer.adapter.persistence.EventCodec;
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.DomainEvent;
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.ids.Role;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.text.ReviewFormatter;
+import com.yamareviewer.testing.KillLogBuilder;
+import com.yamareviewer.testing.TestIds;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.zip.GZIPOutputStream;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+
+public class ReplayTest
+{
+	@Rule
+	public TemporaryFolder folder = new TemporaryFolder();
+
+	private static KillLog kill()
+	{
+		return KillLogBuilder.kill()
+			.ticks(50).npcSpawns(Actor.JUDGE, TestIds.id(Role.JUDGE))
+			.ticks(30).npcDespawns(Actor.JUDGE, TestIds.id(Role.JUDGE), true)
+			.ticks(20).hitsplatOn(Actor.SELF, 9).end(EndReason.YAMA_DIED);
+	}
+
+	@Test
+	public void reviewsAKillAndRendersIt()
+	{
+		KillReview review = Replay.review(kill(), TestIds.registry());
+		String text = Replay.text(ReviewFormatter.format(review));
+
+		assertEquals(Mode.SOLO, review.getMode());
+		assertTrue(text, text.startsWith("Yama (solo) 1:00"));
+		assertTrue(text, text.contains("Complete"));
+		assertTrue(text, text.contains("Phases"));
+		assertTrue(text, text.contains("You: 9"));
+	}
+
+	@Test
+	public void readsARawLogFile() throws IOException
+	{
+		KillLog kill = kill();
+		EventCodec codec = new EventCodec(new Gson());
+		StringBuilder lines = new StringBuilder(codec.encodeHeader(kill.getHeader())).append('\n');
+		for (DomainEvent event : kill.getEvents())
+		{
+			lines.append(codec.encode(event)).append('\n');
+		}
+		lines.append("{\"type\":\"from-the-future\",\"data\":{}}\n");
+		Path file = folder.newFile("0000000000001-test-kill.jsonl.gz").toPath();
+		try (OutputStream out = new GZIPOutputStream(Files.newOutputStream(file)))
+		{
+			out.write(lines.toString().getBytes(StandardCharsets.UTF_8));
+		}
+
+		KillLog read = Replay.read(file);
+
+		assertEquals(kill.getHeader(), read.getHeader());
+		assertEquals(kill.getEvents(), read.getEvents());
+		assertEquals(1, read.getSkippedEvents());
+	}
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `./gradlew test --tests 'com.yamareviewer.domain.text.*' --tests 'com.yamareviewer.tools.ReplayTest'`
+Expected: FAIL — `cannot find symbol` for `Formats`, `ReviewFormatter`, `ChatLines`, `ClipboardExport`, `HistoryFormatter`, `Replay`.
+
+- [ ] **Step 3: Write the formatting helpers and view models**
+
+`src/main/java/com/yamareviewer/domain/text/Formats.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.history.Trend;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
+
+/** Number, time and trend formatting shared by the text renderers and the panel. */
+public final class Formats
+{
+	private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.ROOT);
+	private static final double STEADY_BAND = 0.02;
+
+	private Formats()
+	{
+	}
+
+	/** Ticks as m:ss, one tick being 0.6 seconds. */
+	public static String duration(int ticks)
+	{
+		long seconds = Math.round(ticks * 0.6);
+		return String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60);
+	}
+
+	public static String gp(long amount)
+	{
+		return String.format(Locale.ROOT, "%,d", amount);
+	}
+
+	/** 450, 318k, 1.25M. */
+	public static String compactGp(long amount)
+	{
+		if (amount < 1_000)
+		{
+			return Long.toString(amount);
+		}
+		if (amount < 1_000_000)
+		{
+			return Math.round(amount / 1_000.0) + "k";
+		}
+		return stripZeros(String.format(Locale.ROOT, "%.2f", amount / 1_000_000.0)) + "M";
+	}
+
+	public static String percent(double share)
+	{
+		return Math.round(share * 100) + "%";
+	}
+
+	public static String date(long epochMs)
+	{
+		return DATE.withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(epochMs));
+	}
+
+	/** An arrow and a word comparing the last ten kills with the ten before; "" without two means. */
+	public static String trend(Trend trend, boolean lowerIsBetter)
+	{
+		if (trend == null || trend.getLast10Mean() == null || trend.getPrevious10Mean() == null)
+		{
+			return "";
+		}
+		double last = trend.getLast10Mean();
+		double previous = trend.getPrevious10Mean();
+		if (Math.abs(last - previous) <= Math.abs(previous) * STEADY_BAND)
+		{
+			return "→ steady";
+		}
+		boolean lower = last < previous;
+		return (lower ? "↓ " : "↑ ") + (lower == lowerIsBetter ? "improving" : "declining");
+	}
+
+	private static String stripZeros(String decimal)
+	{
+		String result = decimal;
+		while (result.contains(".") && (result.endsWith("0") || result.endsWith(".")))
+		{
+			result = result.substring(0, result.length() - 1);
+		}
+		return result;
+	}
+}
+```
+
+`src/main/java/com/yamareviewer/domain/text/ViewSection.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import java.util.List;
+import lombok.Value;
+
+/** One rendered section; hiddenReason is null when the section is shown. */
+@Value
+public class ViewSection
+{
+	String title;
+	List<String> lines;
+	String hiddenReason;
+}
+```
+
+`src/main/java/com/yamareviewer/domain/text/ReviewView.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import java.util.List;
+import lombok.Value;
+
+/** Everything the panel shows for one review; plain strings only. */
+@Value
+public class ReviewView
+{
+	String headline;
+	String status;
+	List<ViewSection> sections;
+}
+```
+
+`src/main/java/com/yamareviewer/domain/text/ChatLineOptions.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import lombok.Value;
+
+/** Which chat lines to print (spec 7.2, config keys chat*). */
+@Value
+public class ChatLineOptions
+{
+	boolean phaseLine;
+	boolean prayerLine;
+	boolean flareLine;
+	boolean specLine;
+	boolean deathRecap;
+}
+```
+
+- [ ] **Step 4: Write `ReviewFormatter`**
+
+`src/main/java/com/yamareviewer/domain/text/ReviewFormatter.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.model.Contract;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.model.Phase;
+import com.yamareviewer.domain.review.DamageSource;
+import com.yamareviewer.domain.review.DamageSummary;
+import com.yamareviewer.domain.review.DeathRecap;
+import com.yamareviewer.domain.review.FlareSummary;
+import com.yamareviewer.domain.review.FlareWave;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.review.PhaseSpan;
+import com.yamareviewer.domain.review.PhaseTimes;
+import com.yamareviewer.domain.review.PriceMode;
+import com.yamareviewer.domain.review.RecapHit;
+import com.yamareviewer.domain.review.RecapTick;
+import com.yamareviewer.domain.review.ReviewStatus;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.domain.review.SupplyLine;
+import com.yamareviewer.domain.review.SupplySummary;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+/** Renders a KillReview to plain strings for the panel (spec 7.3). Part 3 adds its sections in format(). */
+public final class ReviewFormatter
+{
+	private ReviewFormatter()
+	{
+	}
+
+	public static ReviewView format(KillReview review)
+	{
+		List<ViewSection> sections = new ArrayList<>();
+		if (review.getEndReason() == EndReason.PLAYER_DIED || review.getDeathRecap().isOk())
+		{
+			sections.add(section("Death recap", review.getDeathRecap(), ReviewFormatter::deathRecapLines));
+		}
+		sections.add(section("Phases", review.getPhases(), ReviewFormatter::phaseLines));
+		sections.add(section("Damage taken", review.getDamage(), damage -> damageLines(damage, review.getMode())));
+		sections.add(section("Flares", review.getFlares(), ReviewFormatter::flareLines));
+		sections.add(section("Supplies", review.getSupplies(), ReviewFormatter::supplyLines));
+		return new ReviewView(headline(review), status(review), List.copyOf(sections));
+	}
+
+	/** "Yama (solo, Bloodied Blows) 4:12", "… died in P3 at 3:10", "… left in P2 at 2:00"; "n/a" without phases. */
+	public static String headline(KillReview review)
+	{
+		String who = "Yama (" + modeAndContract(review) + ")";
+		Optional<PhaseTimes> phases = review.getPhases().asOptional();
+		switch (review.getEndReason())
+		{
+			case YAMA_DIED:
+				return who + " " + phases.map(times -> Formats.duration(times.getTotalTicks())).orElse("n/a");
+			case PLAYER_DIED:
+				return who + " died" + phases.map(ReviewFormatter::whereAndWhen).orElse("");
+			default:
+				return who + " left" + phases.map(ReviewFormatter::whereAndWhen).orElse("");
+		}
+	}
+
+	/** "solo", "duo host, Bloodied Blows", "solo, unknown contract". */
+	public static String modeAndContract(KillReview review)
+	{
+		String mode = review.getMode().label();
+		Contract contract = review.getContract();
+		if (!contract.isContract())
+		{
+			return mode;
+		}
+		return mode + ", " + (contract == Contract.UNKNOWN_CONTRACT ? "unknown contract" : contract.shortName());
+	}
+
+	public static String status(KillReview review)
+	{
+		return review.getStatus() == ReviewStatus.COMPLETE ? "Complete" : "Incomplete";
+	}
+
+	public static <T> ViewSection section(String title, Section<T> section, Function<T, List<String>> lines)
+	{
+		if (section.isOk())
+		{
+			return new ViewSection(title, List.copyOf(lines.apply(section.value())), null);
+		}
+		return new ViewSection(title, List.of(), section.hiddenReason().get().label());
+	}
+
+	static List<String> phaseLines(PhaseTimes times)
+	{
+		List<String> lines = new ArrayList<>();
+		for (PhaseSpan span : times.getSpans())
+		{
+			lines.add(span.getPhase().label() + " " + Formats.duration(span.ticks()) + " (" + span.ticks() + " ticks)");
+		}
+		lines.add("Total " + Formats.duration(times.getTotalTicks()) + " (" + times.getTotalTicks() + " ticks)");
+		return lines;
+	}
+
+	static List<String> damageLines(DamageSummary damage, Mode mode)
+	{
+		List<String> lines = new ArrayList<>(playerLines("You", Actor.SELF, damage));
+		if (mode != Mode.SOLO)
+		{
+			lines.addAll(playerLines("Partner", Actor.PARTNER, damage));
+		}
+		lines.add("Shared mechanics: " + damage.shared());
+		return lines;
+	}
+
+	private static List<String> playerLines(String label, Actor player, DamageSummary damage)
+	{
+		List<String> lines = new ArrayList<>();
+		lines.add(label + ": " + damage.total(player));
+		List<String> perPhase = new ArrayList<>();
+		for (Phase phase : Phase.values())
+		{
+			int amount = damage.total(player, phase);
+			if (amount > 0)
+			{
+				perPhase.add(phase.label() + " " + amount);
+			}
+		}
+		if (!perPhase.isEmpty())
+		{
+			lines.add("  " + String.join(" · ", perPhase));
+		}
+		for (Map.Entry<DamageSource, Integer> entry : damage.bySource(player).entrySet())
+		{
+			lines.add("  " + entry.getKey().label() + " " + entry.getValue());
+		}
+		return lines;
+	}
+
+	static List<String> flareLines(FlareSummary flares)
+	{
+		List<String> lines = new ArrayList<>();
+		lines.add("Spawned " + flares.spawned() + ", killed " + flares.killed() + ", exploded " + flares.exploded());
+		lines.add("Yama healed " + flares.getYamaHealing());
+		if (flares.purgingStaffKills() > 0)
+		{
+			lines.add(flares.purgingStaffKills() + " killed with the purging staff");
+		}
+		int number = 1;
+		for (FlareWave wave : flares.getWaves())
+		{
+			lines.add("Wave " + number++ + " (" + wave.cause().name().toLowerCase(Locale.ROOT) + "): " + wave.getFlares().size()
+				+ (wave.getFlares().size() == 1 ? " flare, " : " flares, ") + wave.ticks() + " ticks");
+		}
+		return lines;
+	}
+
+	static List<String> supplyLines(SupplySummary supplies)
+	{
+		List<String> lines = new ArrayList<>();
+		if (supplies.getLines().isEmpty())
+		{
+			lines.add("Nothing used");
+		}
+		for (SupplyLine line : supplies.getLines())
+		{
+			String quantity = "doses".equals(line.getUnit()) ? " " + line.getQuantity() + " doses" : " x" + line.getQuantity();
+			lines.add(line.getName() + quantity + ": " + Formats.gp(line.getCost()) + (line.isNoEffect() ? " (no effect under this contract)" : ""));
+		}
+		lines.add("Total: " + Formats.gp(supplies.getTotalCost()) + " ("
+			+ (supplies.getPriceMode() == PriceMode.GRAND_EXCHANGE ? "Grand Exchange" : "high alchemy") + ")");
+		return lines;
+	}
+
+	static List<String> deathRecapLines(DeathRecap recap)
+	{
+		List<String> lines = recap.getTicks().stream().map(ReviewFormatter::recapTickLine).collect(Collectors.toList());
+		if (recap.isOutOfRunEnergy())
+		{
+			lines.add("Died out of run energy");
+		}
+		return lines;
+	}
+
+	static String recapTickLine(RecapTick tick)
+	{
+		StringBuilder line = new StringBuilder("Tick ").append(tick.getTick())
+			.append(": HP ").append(tick.getHitpoints() < 0 ? "?" : String.valueOf(tick.getHitpoints()))
+			.append(", prayer ").append(tick.getPrayerPoints() < 0 ? "?" : String.valueOf(tick.getPrayerPoints()));
+		if (tick.getRunEnergy() != null)
+		{
+			line.append(", run ").append(tick.getRunEnergy()).append('%');
+		}
+		line.append(", Yama targets ").append(tick.getYamaTarget());
+		for (RecapHit hit : tick.getHits())
+		{
+			line.append(", hit ").append(hit.getAmount()).append(" (").append(hit.getSource().label()).append(')');
+		}
+		for (String item : tick.getConsumed())
+		{
+			line.append(", used ").append(item);
+		}
+		return line.toString();
+	}
+
+	private static String whereAndWhen(PhaseTimes times)
+	{
+		return times.last().map(span -> " in " + span.getPhase().label()).orElse("") + " at " + Formats.duration(times.getTotalTicks());
+	}
+}
+```
+
+- [ ] **Step 5: Write `ChatLines`, `ClipboardExport` and `HistoryFormatter`**
+
+`src/main/java/com/yamareviewer/domain/text/ChatLines.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.review.DamageSummary;
+import com.yamareviewer.domain.review.DeathRecap;
+import com.yamareviewer.domain.review.FlareSummary;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.review.PhaseSpan;
+import com.yamareviewer.domain.review.PhaseTimes;
+import com.yamareviewer.domain.review.SupplySummary;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+/** The chat summary of spec 7.2: up to four lines plus the recap block; hidden values print "n/a". Part 3 fills lines 2 and 4. */
+public final class ChatLines
+{
+	static final String NOT_AVAILABLE = "n/a";
+
+	private ChatLines()
+	{
+	}
+
+	public static List<String> lines(KillReview review, ChatLineOptions options)
+	{
+		List<String> lines = new ArrayList<>();
+		if (options.isPhaseLine())
+		{
+			lines.add(phaseLine(review));
+		}
+		if (options.isPrayerLine())
+		{
+			lines.add(prayerLine(review));
+		}
+		if (options.isFlareLine())
+		{
+			lines.add(flareLine(review));
+		}
+		if (options.isSpecLine())
+		{
+			lines.add(specLine(review));
+		}
+		if (options.isDeathRecap())
+		{
+			Optional<DeathRecap> recap = review.getDeathRecap().asOptional();
+			if (recap.isPresent())
+			{
+				lines.add("Death recap:");
+				lines.addAll(ReviewFormatter.deathRecapLines(recap.get()));
+			}
+		}
+		return lines;
+	}
+
+	/** "Yama (solo, Bloodied Blows) 4:12. P1 1:05, P2 1:10, P3 1:24." */
+	static String phaseLine(KillReview review)
+	{
+		Optional<PhaseTimes> phases = review.getPhases().asOptional();
+		String reached = phases.map(times -> times.getSpans().stream()
+			.filter(span -> !span.getPhase().isJudge())
+			.map(span -> span.getPhase().label() + " " + Formats.duration(span.ticks()))
+			.collect(Collectors.joining(", "))).orElse("");
+		return ReviewFormatter.headline(review) + "." + (reached.isEmpty() ? "" : " " + reached + ".");
+	}
+
+	/** Part 3 fills this with the P3 prayer, crash line and wave results. */
+	static String prayerLine(KillReview review)
+	{
+		return "P3 prayers " + NOT_AVAILABLE + ". Crash lines " + NOT_AVAILABLE + ". Waves " + NOT_AVAILABLE + ".";
+	}
+
+	/** "Flares 5/6 killed. Damage taken 212 (partner 188)." */
+	static String flareLine(KillReview review)
+	{
+		String flares = review.getFlares().asOptional().map(summary -> summary.killed() + "/" + summary.spawned() + " killed").orElse(NOT_AVAILABLE);
+		String damage = review.getDamage().asOptional().map(summary -> damageTaken(summary, review.getMode())).orElse(NOT_AVAILABLE);
+		return "Flares " + flares + ". Damage taken " + damage + ".";
+	}
+
+	/** Part 3 fills the specs; "Specs n/a. Supplies 318k." */
+	static String specLine(KillReview review)
+	{
+		String supplies = review.getSupplies().asOptional().map(summary -> Formats.compactGp(summary.getTotalCost())).orElse(NOT_AVAILABLE);
+		return "Specs " + NOT_AVAILABLE + ". Supplies " + supplies + ".";
+	}
+
+	private static String damageTaken(DamageSummary damage, Mode mode)
+	{
+		String self = String.valueOf(damage.total(Actor.SELF));
+		return mode == Mode.SOLO ? self : self + " (partner " + damage.total(Actor.PARTNER) + ")";
+	}
+}
+```
+
+`src/main/java/com/yamareviewer/domain/text/ClipboardExport.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.review.KillReview;
+import java.util.List;
+
+/** Plain text of spec 7.4: the chat lines, supplies and cost, the death recap if any. Never a player name. Part 3 adds the spec efficiency. */
+public final class ClipboardExport
+{
+	private static final List<String> COPIED_SECTIONS = List.of("Supplies", "Death recap");
+
+	private ClipboardExport()
+	{
+	}
+
+	public static String text(KillReview review)
+	{
+		StringBuilder text = new StringBuilder(String.join("\n", ChatLines.lines(review, new ChatLineOptions(true, true, true, true, false))));
+		List<ViewSection> sections = ReviewFormatter.format(review).getSections();
+		// Copied in COPIED_SECTIONS order (spec 7.4), not the panel's display order.
+		for (String title : COPIED_SECTIONS)
+		{
+			ViewSection section = sections.stream().filter(s -> s.getTitle().equals(title)).findFirst().orElse(null);
+			if (section == null)
+			{
+				continue;
+			}
+			text.append("\n\n").append(section.getTitle()).append('\n');
+			if (section.getHiddenReason() != null)
+			{
+				text.append(ChatLines.NOT_AVAILABLE).append(" (").append(section.getHiddenReason()).append(')');
+			}
+			else
+			{
+				text.append(String.join("\n", section.getLines()));
+			}
+		}
+		return text.toString();
+	}
+}
+```
+
+`src/main/java/com/yamareviewer/domain/text/HistoryFormatter.java`:
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.history.HistoryView;
+import com.yamareviewer.domain.history.KillSummary;
+import com.yamareviewer.domain.history.Trend;
+import com.yamareviewer.domain.review.ReviewStatus;
+import java.util.List;
+
+/** Renders a HistoryView to strings, so the panel does no arithmetic (spec 7.3). */
+public final class HistoryFormatter
+{
+	private HistoryFormatter()
+	{
+	}
+
+	public static List<String> summaryLines(HistoryView view)
+	{
+		int kills = view.getKills().size();
+		if (kills == 0)
+		{
+			return List.of("No kills yet");
+		}
+		String time = view.getAverageKillTicks() == null ? ChatLines.NOT_AVAILABLE
+			: "avg " + Formats.duration((int) Math.round(view.getAverageKillTicks())) + ", best " + Formats.duration(view.getFastestKillTicks())
+				+ arrow(view.getKillTicksTrend(), true);
+		String accuracy = view.getAverageP3Accuracy() == null ? ChatLines.NOT_AVAILABLE
+			: "avg " + Formats.percent(view.getAverageP3Accuracy()) + ", best " + Formats.percent(view.getBestP3Accuracy())
+				+ arrow(view.getP3AccuracyTrend(), false);
+		String cost = view.getAverageCost() == null ? ChatLines.NOT_AVAILABLE
+			: "avg " + Formats.compactGp(Math.round(view.getAverageCost())) + arrow(view.getCostTrend(), true);
+		Trend drained = view.getDefenceDrainedTrend();
+		String defence = drained.getLast10Mean() == null ? ChatLines.NOT_AVAILABLE
+			: "recent avg " + Math.round(drained.getLast10Mean()) + arrow(drained, false);
+		return List.of(
+			kills + (kills == 1 ? " kill" : " kills"),
+			"Kill time: " + time,
+			"P3 accuracy: " + accuracy,
+			"Cost per kill: " + cost,
+			"Defence drained: " + defence);
+	}
+
+	/** "2026-09-24 21:03 · 4:12 · complete · 318k" */
+	public static String killLine(KillSummary kill)
+	{
+		String time = kill.getKillTicks() < 0 ? ChatLines.NOT_AVAILABLE : Formats.duration(kill.getKillTicks());
+		String outcome;
+		if (kill.getEndReason() == EndReason.PLAYER_DIED)
+		{
+			outcome = "died";
+		}
+		else if (kill.getEndReason() == EndReason.LEFT)
+		{
+			outcome = "left";
+		}
+		else
+		{
+			outcome = kill.getStatus() == ReviewStatus.COMPLETE ? "complete" : "incomplete";
+		}
+		String cost = kill.getCost() == null ? "" : " · " + Formats.compactGp(kill.getCost());
+		return Formats.date(kill.getStartEpochMs()) + " · " + time + " · " + outcome + cost;
+	}
+
+	private static String arrow(Trend trend, boolean lowerIsBetter)
+	{
+		String text = Formats.trend(trend, lowerIsBetter);
+		return text.isEmpty() ? "" : " " + text;
+	}
+}
+```
+
+- [ ] **Step 6: Write the replay tool and its Gradle task**
+
+`src/test/java/com/yamareviewer/tools/Replay.java`:
+
+```java
+package com.yamareviewer.tools;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.yamareviewer.adapter.ids.BuiltInIds;
+import com.yamareviewer.adapter.persistence.EventCodec;
+import com.yamareviewer.domain.event.DomainEvent;
+import com.yamareviewer.domain.ids.IdRegistry;
+import com.yamareviewer.domain.ids.Rules;
+import com.yamareviewer.domain.model.KillHeader;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.projection.KillReviewAssembler;
+import com.yamareviewer.domain.projection.Projections;
+import com.yamareviewer.domain.projection.ReviewBuilder;
+import com.yamareviewer.domain.projection.ReviewSettings;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.text.ReviewFormatter;
+import com.yamareviewer.domain.text.ReviewView;
+import com.yamareviewer.domain.text.ViewSection;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.zip.GZIPInputStream;
+
+/**
+ * Development tool: reviews a raw log with the built-in IDs and default rules and prints the review as
+ * text, or as JSON with --json (the expected-review fixtures of Part 3's golden tests are made this way).
+ */
+public final class Replay
+{
+	private Replay()
+	{
+	}
+
+	public static void main(String[] args) throws IOException
+	{
+		if (args.length < 1 || args.length > 2 || (args.length == 2 && !args[1].equals("--json")))
+		{
+			System.err.println("Usage: ./gradlew replay --args=\"<path to raw/*.jsonl.gz> [--json]\"");
+			System.exit(1);
+		}
+		KillReview review = review(read(Path.of(args[0])), BuiltInIds.registry());
+		if (args.length == 2)
+		{
+			System.out.println(new GsonBuilder().setPrettyPrinting().create().toJson(review));
+		}
+		else
+		{
+			System.out.print(text(ReviewFormatter.format(review)));
+		}
+	}
+
+	public static KillLog read(Path file) throws IOException
+	{
+		String text;
+		try (InputStream in = new GZIPInputStream(Files.newInputStream(file)))
+		{
+			text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+		}
+		EventCodec codec = new EventCodec(new Gson());
+		String[] lines = text.split("\n");
+		KillHeader header = codec.decodeHeader(lines[0]);
+		List<DomainEvent> events = new ArrayList<>();
+		int skipped = 0;
+		for (int i = 1; i < lines.length; i++)
+		{
+			if (lines[i].isBlank())
+			{
+				continue;
+			}
+			Optional<DomainEvent> event = codec.decode(lines[i]);
+			if (event.isPresent())
+			{
+				events.add(event.get());
+			}
+			else
+			{
+				skipped++;
+			}
+		}
+		return KillLog.of(header, events, skipped);
+	}
+
+	public static KillReview review(KillLog log, IdRegistry ids)
+	{
+		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), ids, Rules.DEFAULT);
+		return KillReviewAssembler.assemble(log, builder.run(log, ReviewSettings.DEFAULT));
+	}
+
+	public static String text(ReviewView view)
+	{
+		StringBuilder out = new StringBuilder(view.getHeadline()).append('\n').append(view.getStatus()).append('\n');
+		for (ViewSection section : view.getSections())
+		{
+			out.append('\n').append(section.getTitle()).append('\n');
+			if (section.getHiddenReason() != null)
+			{
+				out.append("  hidden: ").append(section.getHiddenReason()).append('\n');
+			}
+			for (String line : section.getLines())
+			{
+				out.append("  ").append(line).append('\n');
+			}
+		}
+		return out.toString();
+	}
+}
+```
+
+Append to `build.gradle` (after the `captureSummary` task) and change `version = '0.1.0'` to `version = '0.2.0'`:
+
+```groovy
+tasks.register('replay', JavaExec) {
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.yamareviewer.tools.Replay'
+}
+```
+
+- [ ] **Step 7: Run the tests to verify they pass**
+
+Run: `./gradlew test --tests 'com.yamareviewer.domain.text.*' --tests 'com.yamareviewer.tools.ReplayTest'`
+Expected: PASS (21 tests).
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add build.gradle src/main/java/com/yamareviewer/domain/text src/test/java/com/yamareviewer/domain/text src/test/java/com/yamareviewer/tools/Replay.java src/test/java/com/yamareviewer/tools/ReplayTest.java
+git commit -m "feat: render reviews as panel text, chat lines and clipboard text; add the replay tool"
+```
+
+---
+### Task 15: KillEndedHandler replacement and the chat publisher
+
+**Files:**
+- Replace: `src/main/java/com/yamareviewer/application/handler/KillEndedHandler.java` (Part 1 Task 6)
+- Create: `src/main/java/com/yamareviewer/adapter/publish/CompositeReviewPublisher.java`, `ChatReviewPublisher.java`, `ChatReviewPublisherFactory.java`
+- Replace: `src/test/java/com/yamareviewer/application/handler/KillEndedHandlerTest.java`
+- Test: `src/test/java/com/yamareviewer/adapter/publish/CompositeReviewPublisherTest.java`, `ChatReviewPublisherTest.java`
+
+**Interfaces:**
+- Consumes: `LogRepository`, `KillEndedListener` (Part 1), `ReviewRepository` (Task 12), `ReviewPublisher`, `HistoryProjector` (Task 13), `ReviewBuilder`, `KillReviewAssembler`, `ReviewSettings` (Tasks 5, 12), `ChatLines`, `ChatLineOptions` (Task 14).
+- Produces: `KillEndedHandler(ExecutorService, LogRepository, ReviewRepository, ReviewBuilder, ReviewPublisher, BooleanSupplier active, IntSupplier rawLogsKept, IntSupplier historySize, Supplier<ReviewSettings>)` keeping `killEnded`, `pending()` and package-private `handle(KillLog)` (Part 4 inserts the health checks between `builder.run` and `KillReviewAssembler.assemble`); `CompositeReviewPublisher(List<ReviewPublisher>)`; `ChatReviewPublisher(ChatMessageManager, Supplier<ChatLineOptions>)`; `ChatReviewPublisherFactory` (Guice-injectable, `create(Supplier<ChatLineOptions>)`), which keeps `ChatMessageManager` out of the root package as `ArchitectureTest.onlyPublishTalksToChat` demands.
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace `src/test/java/com/yamareviewer/application/handler/KillEndedHandlerTest.java`:
+
+```java
+package com.yamareviewer.application.handler;
+
+import com.yamareviewer.application.port.LogRepository;
+import com.yamareviewer.application.port.ReviewPublisher;
+import com.yamareviewer.application.port.ReviewRepository;
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.history.HistoryIndex;
+import com.yamareviewer.domain.history.HistoryKey;
+import com.yamareviewer.domain.ids.Rules;
+import com.yamareviewer.domain.model.Contract;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.projection.ReviewBuilder;
+import com.yamareviewer.domain.projection.ReviewSettings;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.review.ReviewStatus;
+import com.yamareviewer.testing.KillLogBuilder;
+import com.yamareviewer.testing.TestIds;
+import java.io.IOException;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import org.junit.After;
+import org.junit.Test;
+
+public class KillEndedHandlerTest
+{
+	private final FakeLogs logs = new FakeLogs();
+	private final FakeReviews reviews = new FakeReviews();
+	private final FakePublisher publisher = new FakePublisher();
+	private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> new Thread(r, "yama-reviewer-test"));
+
+	@After
+	public void tearDown()
+	{
+		executor.shutdownNow();
+	}
+
+	private KillEndedHandler handler(boolean active)
+	{
+		ReviewBuilder builder = new ReviewBuilder(List.of(), TestIds.registry(), Rules.DEFAULT);
+		return new KillEndedHandler(executor, logs, reviews, builder, publisher, () -> active, () -> 20, () -> 50, () -> ReviewSettings.DEFAULT);
+	}
+
+	private static KillLog kill()
+	{
+		return KillLogBuilder.kill().ticks(2).end(EndReason.YAMA_DIED);
+	}
+
+	@Test
+	public void storesTheLogAndTheReviewThenPublishesOnTheExecutor() throws Exception
+	{
+		KillEndedHandler handler = handler(true);
+
+		handler.killEnded(kill());
+		handler.pending().get(5, TimeUnit.SECONDS);
+
+		assertEquals(List.of("save test-kill on yama-reviewer-test", "prune 20"), logs.calls);
+		assertEquals(List.of("save test-kill", "prune 50", "loadAll"), reviews.calls);
+		assertEquals(1, publisher.published.size());
+		KillReview review = publisher.published.get(0);
+		assertEquals("test-kill", review.getKillId());
+		assertEquals(Mode.SOLO, review.getMode());
+		assertEquals(ReviewStatus.COMPLETE, review.getStatus());
+		assertEquals(1, publisher.histories.get(0).view(new HistoryKey(Mode.SOLO, Contract.NONE)).get().getKills().size());
+		assertEquals("yama-reviewer-test", publisher.thread);
+	}
+
+	@Test
+	public void nothingIsPublishedWhenThePluginIsInactive() throws Exception
+	{
+		KillEndedHandler handler = handler(false);
+
+		handler.killEnded(kill());
+		handler.pending().get(5, TimeUnit.SECONDS);
+
+		assertTrue(publisher.published.isEmpty());
+		assertEquals(1, reviews.saved.size());
+	}
+
+	@Test
+	public void storageFailuresStillPublishTheReview() throws Exception
+	{
+		logs.fail = true;
+		reviews.failSave = true;
+		KillEndedHandler handler = handler(true);
+
+		handler.killEnded(kill());
+		handler.pending().get(5, TimeUnit.SECONDS);
+
+		assertEquals(1, publisher.published.size());
+	}
+
+	@Test
+	public void aHistoryLoadFailureFallsBackToThisKill() throws Exception
+	{
+		reviews.failLoad = true;
+		KillEndedHandler handler = handler(true);
+
+		handler.killEnded(kill());
+		handler.pending().get(5, TimeUnit.SECONDS);
+
+		assertEquals(1, publisher.histories.get(0).view(new HistoryKey(Mode.SOLO, Contract.NONE)).get().getKills().size());
+	}
+
+	@Test
+	public void aPublisherFailureDoesNotEscape() throws Exception
+	{
+		publisher.fail = true;
+		KillEndedHandler handler = handler(true);
+
+		handler.killEnded(kill());
+		handler.pending().get(5, TimeUnit.SECONDS);
+
+		assertEquals(1, reviews.saved.size());
+	}
+
+	@Test
+	public void aStoppedExecutorIsLoggedNotThrown()
+	{
+		executor.shutdownNow();
+		KillEndedHandler handler = handler(true);
+
+		handler.killEnded(kill());
+
+		assertTrue(handler.pending().isDone());
+		assertTrue(publisher.published.isEmpty());
+	}
+
+	private static final class FakeLogs implements LogRepository
+	{
+		private final List<String> calls = new CopyOnWriteArrayList<>();
+		private volatile boolean fail;
+
+		@Override
+		public void save(KillLog kill) throws IOException
+		{
+			if (fail)
+			{
+				throw new IOException("disk full");
+			}
+			calls.add("save " + kill.getHeader().getKillId() + " on " + Thread.currentThread().getName());
+		}
+
+		@Override
+		public List<KillLog> loadAll()
+		{
+			return List.of();
+		}
+
+		@Override
+		public void prune(int keep)
+		{
+			calls.add("prune " + keep);
+		}
+	}
+
+	private static final class FakeReviews implements ReviewRepository
+	{
+		private final List<String> calls = new CopyOnWriteArrayList<>();
+		private final List<KillReview> saved = new CopyOnWriteArrayList<>();
+		private volatile boolean failSave;
+		private volatile boolean failLoad;
+
+		@Override
+		public void save(KillReview review) throws IOException
+		{
+			if (failSave)
+			{
+				throw new IOException("disk full");
+			}
+			calls.add("save " + review.getKillId());
+			saved.add(review);
+		}
+
+		@Override
+		public List<KillReview> loadAll() throws IOException
+		{
+			calls.add("loadAll");
+			if (failLoad)
+			{
+				throw new IOException("disk gone");
+			}
+			return List.copyOf(saved);
+		}
+
+		@Override
+		public void prune(int keepPerKey)
+		{
+			calls.add("prune " + keepPerKey);
+		}
+	}
+
+	private static final class FakePublisher implements ReviewPublisher
+	{
+		private final List<KillReview> published = new CopyOnWriteArrayList<>();
+		private final List<HistoryIndex> histories = new CopyOnWriteArrayList<>();
+		private volatile String thread;
+		private volatile boolean fail;
+
+		@Override
+		public void publish(KillReview review, HistoryIndex history)
+		{
+			if (fail)
+			{
+				throw new IllegalStateException("chat is gone");
+			}
+			thread = Thread.currentThread().getName();
+			published.add(review);
+			histories.add(history);
+		}
+
+		@Override
+		public void showHistory(HistoryIndex history)
+		{
+			histories.add(history);
+		}
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/adapter/publish/CompositeReviewPublisherTest.java`:
+
+```java
+package com.yamareviewer.adapter.publish;
+
+import com.yamareviewer.application.port.ReviewPublisher;
+import com.yamareviewer.domain.history.HistoryIndex;
+import com.yamareviewer.domain.history.HistoryProjector;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.testing.Reviews;
+import java.util.ArrayList;
+import java.util.List;
+import static org.junit.Assert.assertEquals;
+import org.junit.Test;
+
+public class CompositeReviewPublisherTest
+{
+	private final List<String> calls = new ArrayList<>();
+
+	private ReviewPublisher publisher(String name, boolean fail)
+	{
+		return new ReviewPublisher()
+		{
+			@Override
+			public void publish(KillReview review, HistoryIndex history)
+			{
+				calls.add(name + " publish " + review.getKillId());
+				if (fail)
+				{
+					throw new IllegalStateException(name);
+				}
+			}
+
+			@Override
+			public void showHistory(HistoryIndex history)
+			{
+				calls.add(name + " history");
+				if (fail)
+				{
+					throw new IllegalStateException(name);
+				}
+			}
+		};
+	}
+
+	@Test
+	public void forwardsToEveryPublisherEvenWhenOneFails()
+	{
+		CompositeReviewPublisher composite = new CompositeReviewPublisher(List.of(publisher("chat", true), publisher("panel", false)));
+		HistoryIndex history = HistoryProjector.index(List.of(), 50);
+
+		composite.publish(Reviews.sample(), history);
+		composite.showHistory(history);
+
+		assertEquals(List.of("chat publish kill-1", "panel publish kill-1", "chat history", "panel history"), calls);
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/adapter/publish/ChatReviewPublisherTest.java`:
+
+```java
+package com.yamareviewer.adapter.publish;
+
+import com.yamareviewer.domain.history.HistoryIndex;
+import com.yamareviewer.domain.history.HistoryProjector;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.text.ChatLineOptions;
+import com.yamareviewer.domain.text.ChatLines;
+import com.yamareviewer.testing.Reviews;
+import java.util.List;
+import static java.util.stream.Collectors.toList;
+import net.runelite.api.ChatMessageType;
+import net.runelite.client.chat.ChatMessageManager;
+import net.runelite.client.chat.QueuedMessage;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import org.junit.Test;
+import org.mockito.ArgumentCaptor;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+
+public class ChatReviewPublisherTest
+{
+	private final ChatMessageManager chat = mock(ChatMessageManager.class);
+	private final HistoryIndex history = HistoryProjector.index(List.of(), 50);
+	private ChatLineOptions options = new ChatLineOptions(true, true, true, true, false);
+	private final ChatReviewPublisher publisher = new ChatReviewPublisher(chat, () -> options);
+
+	@Test
+	public void queuesOneGameMessagePerEnabledLine()
+	{
+		KillReview review = Reviews.sample();
+
+		publisher.publish(review, history);
+
+		ArgumentCaptor<QueuedMessage> captor = ArgumentCaptor.forClass(QueuedMessage.class);
+		verify(chat, times(4)).queue(captor.capture());
+		assertTrue(captor.getAllValues().stream().allMatch(message -> message.getType() == ChatMessageType.GAMEMESSAGE));
+		assertEquals(ChatLines.lines(review, options), captor.getAllValues().stream().map(QueuedMessage::getRuneLiteFormattedMessage).collect(toList()));
+	}
+
+	@Test
+	public void readsTheOptionsAtPublishTime()
+	{
+		options = new ChatLineOptions(true, false, false, false, false);
+
+		publisher.publish(Reviews.sample(), history);
+
+		verify(chat, times(1)).queue(org.mockito.ArgumentMatchers.any(QueuedMessage.class));
+	}
+
+	@Test
+	public void historyIsNotChatted()
+	{
+		publisher.showHistory(history);
+
+		verifyNoInteractions(chat);
+	}
+
+	@Test
+	public void theFactoryBuildsAPublisher()
+	{
+		ChatReviewPublisher built = new ChatReviewPublisherFactory(chat).create(() -> options);
+
+		built.publish(Reviews.sample(), history);
+
+		verify(chat, times(4)).queue(org.mockito.ArgumentMatchers.any(QueuedMessage.class));
+	}
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `./gradlew test --tests 'com.yamareviewer.application.handler.KillEndedHandlerTest' --tests 'com.yamareviewer.adapter.publish.*'`
+Expected: FAIL — the Part 1 `KillEndedHandler` has no nine-argument constructor; `cannot find symbol` for `CompositeReviewPublisher`, `ChatReviewPublisher`, `ChatReviewPublisherFactory`.
+
+- [ ] **Step 3: Replace `KillEndedHandler`**
+
+`src/main/java/com/yamareviewer/application/handler/KillEndedHandler.java`:
+
+```java
+package com.yamareviewer.application.handler;
+
+import com.yamareviewer.application.command.KillEndedListener;
+import com.yamareviewer.application.port.LogRepository;
+import com.yamareviewer.application.port.ReviewPublisher;
+import com.yamareviewer.application.port.ReviewRepository;
+import com.yamareviewer.domain.history.HistoryIndex;
+import com.yamareviewer.domain.history.HistoryProjector;
+import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.projection.KillReviewAssembler;
+import com.yamareviewer.domain.projection.ProjectionContext;
+import com.yamareviewer.domain.projection.ReviewBuilder;
+import com.yamareviewer.domain.projection.ReviewSettings;
+import com.yamareviewer.domain.review.KillReview;
+import java.io.IOException;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.function.BooleanSupplier;
+import java.util.function.IntSupplier;
+import java.util.function.Supplier;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * Everything that happens after a kill, on the plugin's own executor (spec 4.3): store the raw log, build
+ * the review, store it, rebuild the history, publish if the plugin is still active. Storage failures are
+ * logged and the review is still published (spec 11). Part 4 runs the health checks between the build and
+ * the assembly.
+ */
+@Slf4j
+public final class KillEndedHandler implements KillEndedListener
+{
+	private final ExecutorService executor;
+	private final LogRepository logs;
+	private final ReviewRepository reviews;
+	private final ReviewBuilder builder;
+	private final ReviewPublisher publisher;
+	private final BooleanSupplier active;
+	private final IntSupplier rawLogsKept;
+	private final IntSupplier historySize;
+	private final Supplier<ReviewSettings> settings;
+	private volatile Future<?> pending = CompletableFuture.completedFuture(null);
+
+	public KillEndedHandler(ExecutorService executor, LogRepository logs, ReviewRepository reviews,
+		ReviewBuilder builder, ReviewPublisher publisher, BooleanSupplier active,
+		IntSupplier rawLogsKept, IntSupplier historySize, Supplier<ReviewSettings> settings)
+	{
+		this.executor = executor;
+		this.logs = logs;
+		this.reviews = reviews;
+		this.builder = builder;
+		this.publisher = publisher;
+		this.active = active;
+		this.rawLogsKept = rawLogsKept;
+		this.historySize = historySize;
+		this.settings = settings;
+	}
+
+	@Override
+	public void killEnded(KillLog kill)
+	{
+		try
+		{
+			pending = executor.submit(() -> handle(kill));
+		}
+		catch (RejectedExecutionException e)
+		{
+			log.warn("Plugin stopped before kill {} could be stored", kill.getHeader().getKillId());
+		}
+	}
+
+	/** The latest submitted work, so client shutdown can wait for it. */
+	public Future<?> pending()
+	{
+		return pending;
+	}
+
+	void handle(KillLog kill)
+	{
+		String killId = kill.getHeader().getKillId();
+		try
+		{
+			logs.save(kill);
+			logs.prune(Math.max(1, rawLogsKept.getAsInt()));
+		}
+		catch (IOException | RuntimeException e)
+		{
+			log.warn("Could not store raw log {}", killId, e);
+		}
+
+		KillReview review;
+		try
+		{
+			ProjectionContext context = builder.run(kill, settings.get());
+			review = KillReviewAssembler.assemble(kill, context);
+		}
+		catch (RuntimeException e)
+		{
+			log.error("Could not review kill {}", killId, e);
+			return;
+		}
+
+		int keep = Math.max(1, historySize.getAsInt());
+		try
+		{
+			reviews.save(review);
+			reviews.prune(keep);
+		}
+		catch (IOException | RuntimeException e)
+		{
+			log.warn("Could not store review {}", killId, e);
+		}
+
+		HistoryIndex history;
+		try
+		{
+			history = HistoryProjector.index(reviews.loadAll(), keep);
+		}
+		catch (IOException | RuntimeException e)
+		{
+			log.warn("Could not load the review history; showing this kill only", e);
+			history = HistoryProjector.index(List.of(review), keep);
+		}
+
+		if (!active.getAsBoolean())
+		{
+			log.debug("Plugin inactive; review {} not published", killId);
+			return;
+		}
+		try
+		{
+			publisher.publish(review, history);
+		}
+		catch (RuntimeException e)
+		{
+			log.warn("Could not publish review {}", killId, e);
+		}
+	}
+}
+```
+
+- [ ] **Step 4: Write the publishers**
+
+`src/main/java/com/yamareviewer/adapter/publish/CompositeReviewPublisher.java`:
+
+```java
+package com.yamareviewer.adapter.publish;
+
+import com.yamareviewer.application.port.ReviewPublisher;
+import com.yamareviewer.domain.history.HistoryIndex;
+import com.yamareviewer.domain.review.KillReview;
+import java.util.List;
+import lombok.extern.slf4j.Slf4j;
+
+/** Fans out to the chat and panel publishers; one failing publisher never stops the others. */
+@Slf4j
+public final class CompositeReviewPublisher implements ReviewPublisher
+{
+	private final List<ReviewPublisher> publishers;
+
+	public CompositeReviewPublisher(List<ReviewPublisher> publishers)
+	{
+		this.publishers = List.copyOf(publishers);
+	}
+
+	@Override
+	public void publish(KillReview review, HistoryIndex history)
+	{
+		for (ReviewPublisher publisher : publishers)
+		{
+			try
+			{
+				publisher.publish(review, history);
+			}
+			catch (RuntimeException e)
+			{
+				log.warn("Publisher {} failed", publisher.getClass().getSimpleName(), e);
+			}
+		}
+	}
+
+	@Override
+	public void showHistory(HistoryIndex history)
+	{
+		for (ReviewPublisher publisher : publishers)
+		{
+			try
+			{
+				publisher.showHistory(history);
+			}
+			catch (RuntimeException e)
+			{
+				log.warn("Publisher {} failed", publisher.getClass().getSimpleName(), e);
+			}
+		}
+	}
+}
+```
+
+`src/main/java/com/yamareviewer/adapter/publish/ChatReviewPublisher.java`:
+
+```java
+package com.yamareviewer.adapter.publish;
+
+import com.yamareviewer.application.port.ReviewPublisher;
+import com.yamareviewer.domain.history.HistoryIndex;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.text.ChatLineOptions;
+import com.yamareviewer.domain.text.ChatLines;
+import java.util.function.Supplier;
+import net.runelite.api.ChatMessageType;
+import net.runelite.client.chat.ChatMessageManager;
+import net.runelite.client.chat.QueuedMessage;
+
+/** The chat summary of spec 7.2. ChatMessageManager.queue is thread-safe, so this runs on the plugin executor. */
+public final class ChatReviewPublisher implements ReviewPublisher
+{
+	private final ChatMessageManager chatMessageManager;
+	private final Supplier<ChatLineOptions> options;
+
+	public ChatReviewPublisher(ChatMessageManager chatMessageManager, Supplier<ChatLineOptions> options)
+	{
+		this.chatMessageManager = chatMessageManager;
+		this.options = options;
+	}
+
+	@Override
+	public void publish(KillReview review, HistoryIndex history)
+	{
+		for (String line : ChatLines.lines(review, options.get()))
+		{
+			chatMessageManager.queue(QueuedMessage.builder()
+				.type(ChatMessageType.GAMEMESSAGE)
+				.runeLiteFormattedMessage(line)
+				.build());
+		}
+	}
+
+	@Override
+	public void showHistory(HistoryIndex history)
+	{
+		// The history is only shown in the panel.
+	}
+}
+```
+
+`src/main/java/com/yamareviewer/adapter/publish/ChatReviewPublisherFactory.java`:
+
+```java
+package com.yamareviewer.adapter.publish;
+
+import com.yamareviewer.domain.text.ChatLineOptions;
+import java.util.function.Supplier;
+import javax.inject.Inject;
+import net.runelite.client.chat.ChatMessageManager;
+
+/**
+ * Injected into the plugin so that only this package depends on ChatMessageManager
+ * (ArchitectureTest.onlyPublishTalksToChat); the plugin never sees the chat manager itself.
+ */
+public final class ChatReviewPublisherFactory
+{
+	private final ChatMessageManager chatMessageManager;
+
+	@Inject
+	public ChatReviewPublisherFactory(ChatMessageManager chatMessageManager)
+	{
+		this.chatMessageManager = chatMessageManager;
+	}
+
+	public ChatReviewPublisher create(Supplier<ChatLineOptions> options)
+	{
+		return new ChatReviewPublisher(chatMessageManager, options);
+	}
+}
+```
+
+- [ ] **Step 5: Keep the plugin compiling until Task 17 rewires it**
+
+`YamaReviewerPlugin.startUp()` (Part 1 Task 10) still calls the old three-argument constructor, so the main source set would not compile. Replace that one line
+
+```java
+		KillEndedHandler handler = new KillEndedHandler(executor, logs, config::rawLogsKept);
+```
+
+with this stopgap (replaced entirely in Task 17; `active` is `() -> false`, so nothing is published by this intermediate build):
+
+```java
+		KillEndedHandler handler = new KillEndedHandler(executor, logs, new GsonReviewRepository(new FilepathFileStore(getPluginDirectory()), gson),
+			new ReviewBuilder(Projections.standard(), ids, Rules.DEFAULT), new CompositeReviewPublisher(List.of()), () -> false,
+			config::rawLogsKept, () -> 50, () -> ReviewSettings.DEFAULT);
+```
+
+and add the imports `com.yamareviewer.adapter.persistence.GsonReviewRepository`, `com.yamareviewer.adapter.publish.CompositeReviewPublisher`, `com.yamareviewer.domain.ids.Rules`, `com.yamareviewer.domain.projection.Projections`, `com.yamareviewer.domain.projection.ReviewBuilder`, `com.yamareviewer.domain.projection.ReviewSettings` and `java.util.List` to the plugin.
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+Run: `./gradlew test --tests 'com.yamareviewer.application.handler.KillEndedHandlerTest' --tests 'com.yamareviewer.adapter.publish.*'`
+Expected: PASS (11 tests).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/main/java/com/yamareviewer/YamaReviewerPlugin.java src/main/java/com/yamareviewer/application/handler/KillEndedHandler.java src/main/java/com/yamareviewer/adapter/publish src/test/java/com/yamareviewer/application/handler/KillEndedHandlerTest.java src/test/java/com/yamareviewer/adapter/publish
+git commit -m "feat: build, store and publish the review when a kill ends"
+```
+
+---
+### Task 16: The side panel and its publisher
+
+**Files:**
+- Create in `src/main/java/com/yamareviewer/adapter/ui/`: `TextLine.java`, `ReviewTab.java`, `HistoryTab.java`, `ReviewPanel.java`, `PanelIcon.java`, `SystemClipboard.java`, `KillReviewOpener.java`
+- Create: `src/main/java/com/yamareviewer/adapter/publish/PanelReviewPublisher.java`
+- Test: `src/test/java/com/yamareviewer/adapter/ui/ReviewPanelTest.java`, `PanelIconTest.java`, `KillReviewOpenerTest.java`, `src/test/java/com/yamareviewer/adapter/publish/PanelReviewPublisherTest.java`
+
+**Interfaces:**
+- Consumes: `ReviewView`, `ViewSection`, `ReviewFormatter`, `ClipboardExport`, `HistoryFormatter` (Task 14), `HistoryIndex`, `HistoryKey`, `HistoryView` (Task 13), `ReviewRepository` (Task 12), `Mode`, `Contract` (Task 1), RuneLite `PluginPanel`, `ColorScheme`.
+- Produces: `ReviewPanel(Consumer<String> clipboard)` extending `PluginPanel` with `show(ReviewView, String clipboardText, HistoryIndex)`, `showHistory(HistoryIndex)`, `showKill(Mode, ReviewView, String clipboardText)` (all hop to the Swing thread themselves), `onKillSelected(Consumer<String> killId)`, `footer()` (a `JPanel` reserved for Part 4's "Report a problem"), package-private `lastKillTab()` and `historyTab(Mode)` for tests; `PanelIcon.create()` (a 16×16 Java2D icon, no binary resource); `SystemClipboard.copy(String)`; `KillReviewOpener(ExecutorService, ReviewRepository, ReviewPanel)` with `open(String killId)`; `PanelReviewPublisher(ReviewPanel)`. Swing code renders strings only; every number is formatted in `domain.text`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`src/test/java/com/yamareviewer/adapter/ui/ReviewPanelTest.java`:
+
+```java
+package com.yamareviewer.adapter.ui;
+
+import com.yamareviewer.domain.history.HistoryIndex;
+import com.yamareviewer.domain.history.HistoryProjector;
+import com.yamareviewer.domain.model.Contract;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.review.HiddenReason;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.domain.text.ReviewFormatter;
+import com.yamareviewer.domain.text.ReviewView;
+import com.yamareviewer.testing.Reviews;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import javax.swing.SwingUtilities;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import org.junit.Before;
+import org.junit.Test;
+
+public class ReviewPanelTest
+{
+	private final List<String> copied = new ArrayList<>();
+	private final List<String> opened = new ArrayList<>();
+	private ReviewPanel panel;
+
+	@Before
+	public void setUp() throws Exception
+	{
+		SwingUtilities.invokeAndWait(() -> panel = new ReviewPanel(copied::add));
+		panel.onKillSelected(opened::add);
+	}
+
+	private static void flush() throws Exception
+	{
+		SwingUtilities.invokeAndWait(() ->
+		{
+		});
+	}
+
+	private static ReviewView view()
+	{
+		return ReviewFormatter.format(Reviews.sample().toBuilder().flares(Section.hidden(HiddenReason.IDS_NOT_CAPTURED)).build());
+	}
+
+	private static boolean contains(List<String> texts, String needle)
+	{
+		return texts.stream().anyMatch(text -> text.contains(needle));
+	}
+
+	@Test
+	public void showsTheLastKillWithItsStatusAndCopiesItsText() throws Exception
+	{
+		assertFalse(panel.lastKillTab().copyButton().isEnabled());
+
+		panel.show(view(), "clipboard text", new HistoryIndex(Map.of()));
+		flush();
+
+		List<String> texts = panel.lastKillTab().texts();
+		assertTrue(texts.toString(), contains(texts, "Yama (solo) 4:12"));
+		assertTrue(texts.toString(), contains(texts, "Complete"));
+		assertTrue(texts.toString(), contains(texts, "Hidden: IDs not captured"));
+		assertTrue(texts.toString(), contains(texts, "Shark x2: 1,600"));
+		SwingUtilities.invokeAndWait(() -> panel.lastKillTab().copyButton().doClick());
+		assertEquals(List.of("clipboard text"), copied);
+	}
+
+	@Test
+	public void modeTabsFilterByContractAndOpenASelectedKill() throws Exception
+	{
+		KillReview none = Reviews.builder("k1", 1_000L, Mode.SOLO, Contract.NONE).build();
+		KillReview bloodied = Reviews.builder("k2", 2_000L, Mode.SOLO, Contract.BLOODIED_BLOWS).build();
+		KillReview host = Reviews.builder("k3", 3_000L, Mode.DUO_HOST, Contract.NONE).build();
+
+		panel.showHistory(HistoryProjector.index(List.of(none, bloodied, host), 50));
+		flush();
+
+		HistoryTab solo = panel.historyTab(Mode.SOLO);
+		assertEquals(List.of("k1"), solo.killIds());
+		assertTrue(contains(solo.texts(), "1 kill"));
+		assertEquals(List.of("k3"), panel.historyTab(Mode.DUO_HOST).killIds());
+		assertTrue(contains(panel.historyTab(Mode.DUO_JOINER).texts(), "No kills yet"));
+
+		SwingUtilities.invokeAndWait(() -> solo.contractFilter().setSelectedItem(Contract.BLOODIED_BLOWS.displayName()));
+		flush();
+		assertEquals(List.of("k2"), solo.killIds());
+
+		SwingUtilities.invokeAndWait(() -> solo.killButtons().get(0).doClick());
+		assertEquals(List.of("k2"), opened);
+	}
+
+	@Test
+	public void aPastKillRendersInsideItsModeTab() throws Exception
+	{
+		panel.showKill(Mode.DUO_HOST, view(), "past text");
+		flush();
+
+		HistoryTab tab = panel.historyTab(Mode.DUO_HOST);
+		assertTrue(contains(tab.texts(), "Yama (solo) 4:12"));
+		SwingUtilities.invokeAndWait(() -> tab.selectedKill().copyButton().doClick());
+		assertEquals(List.of("past text"), copied);
+	}
+
+	@Test
+	public void theFooterIsEmptyUntilPart4()
+	{
+		assertEquals(0, panel.footer().getComponentCount());
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/adapter/ui/PanelIconTest.java`:
+
+```java
+package com.yamareviewer.adapter.ui;
+
+import java.awt.image.BufferedImage;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import org.junit.Test;
+
+public class PanelIconTest
+{
+	@Test
+	public void drawsASixteenPixelIconWithTransparentCornersAndAnOpaqueStem()
+	{
+		BufferedImage icon = PanelIcon.create();
+
+		assertEquals(16, icon.getWidth());
+		assertEquals(16, icon.getHeight());
+		assertEquals(0, icon.getRGB(0, 15) >>> 24);
+		assertTrue((icon.getRGB(8, 11) >>> 24) > 0);
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/adapter/ui/KillReviewOpenerTest.java`:
+
+```java
+package com.yamareviewer.adapter.ui;
+
+import com.yamareviewer.application.port.ReviewRepository;
+import com.yamareviewer.domain.model.Contract;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.text.ClipboardExport;
+import com.yamareviewer.domain.text.ReviewFormatter;
+import com.yamareviewer.testing.Reviews;
+import java.io.IOException;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import org.junit.After;
+import org.junit.Test;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+
+public class KillReviewOpenerTest
+{
+	private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> new Thread(r, "yama-reviewer-test"));
+	private final ReviewPanel panel = mock(ReviewPanel.class);
+	private final KillReview a = Reviews.builder("a", 1_000L, Mode.SOLO, Contract.NONE).build();
+	private final KillReview b = Reviews.builder("b", 2_000L, Mode.DUO_HOST, Contract.NONE).build();
+	private final ReviewRepository reviews = new ReviewRepository()
+	{
+		@Override
+		public void save(KillReview review)
+		{
+		}
+
+		@Override
+		public List<KillReview> loadAll() throws IOException
+		{
+			return List.of(b, a);
+		}
+
+		@Override
+		public void prune(int keepPerKey)
+		{
+		}
+	};
+	private final KillReviewOpener opener = new KillReviewOpener(executor, reviews, panel);
+
+	@After
+	public void tearDown()
+	{
+		executor.shutdownNow();
+	}
+
+	private void drain() throws Exception
+	{
+		executor.submit(() ->
+		{
+		}).get(5, TimeUnit.SECONDS);
+	}
+
+	@Test
+	public void loadsTheReviewOnTheExecutorAndShowsItInItsModeTab() throws Exception
+	{
+		opener.open("b");
+		drain();
+
+		verify(panel).showKill(Mode.DUO_HOST, ReviewFormatter.format(b), ClipboardExport.text(b));
+	}
+
+	@Test
+	public void anUnknownKillShowsNothing() throws Exception
+	{
+		opener.open("zzz");
+		drain();
+
+		verifyNoInteractions(panel);
+	}
+
+	@Test
+	public void aStoppedExecutorIsLoggedNotThrown()
+	{
+		executor.shutdownNow();
+
+		opener.open("a");
+
+		verifyNoInteractions(panel);
+	}
+}
+```
+
+`src/test/java/com/yamareviewer/adapter/publish/PanelReviewPublisherTest.java`:
+
+```java
+package com.yamareviewer.adapter.publish;
+
+import com.yamareviewer.adapter.ui.ReviewPanel;
+import com.yamareviewer.domain.history.HistoryIndex;
+import com.yamareviewer.domain.history.HistoryProjector;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.text.ClipboardExport;
+import com.yamareviewer.domain.text.ReviewFormatter;
+import com.yamareviewer.testing.Reviews;
+import java.util.List;
+import org.junit.Test;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.same;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.ArgumentMatchers.eq;
+
+public class PanelReviewPublisherTest
+{
+	private final ReviewPanel panel = mock(ReviewPanel.class);
+	private final PanelReviewPublisher publisher = new PanelReviewPublisher(panel);
+
+	@Test
+	public void handsViewModelsToThePanel()
+	{
+		KillReview review = Reviews.sample();
+		HistoryIndex history = HistoryProjector.index(List.of(review), 50);
+
+		publisher.publish(review, history);
+		publisher.showHistory(history);
+
+		verify(panel).show(eq(ReviewFormatter.format(review)), eq(ClipboardExport.text(review)), same(history));
+		verify(panel).showHistory(same(history));
+		verifyNoMoreInteractions(panel);
+	}
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `./gradlew test --tests 'com.yamareviewer.adapter.ui.*' --tests 'com.yamareviewer.adapter.publish.PanelReviewPublisherTest'`
+Expected: FAIL — `cannot find symbol` for `ReviewPanel`, `HistoryTab`, `PanelIcon`, `KillReviewOpener`, `PanelReviewPublisher`.
+
+- [ ] **Step 3: Write the text lines and the two tab components**
+
+`src/main/java/com/yamareviewer/adapter/ui/TextLine.java`:
+
+```java
+package com.yamareviewer.adapter.ui;
+
+import java.awt.Color;
+import java.awt.Font;
+import javax.swing.JLabel;
+import net.runelite.client.ui.ColorScheme;
+
+/** Wrapping labels for the fixed-width panel; the plain text is kept as a client property for tests. */
+final class TextLine
+{
+	static final String PLAIN_TEXT = "yama-reviewer.plain-text";
+	private static final int WRAP_WIDTH_PX = 195;
+
+	private TextLine()
+	{
+	}
+
+	static JLabel label(String text)
+	{
+		JLabel label = new JLabel("<html><body style='width:" + WRAP_WIDTH_PX + "px'>" + escape(text) + "</body></html>");
+		label.putClientProperty(PLAIN_TEXT, text);
+		label.setForeground(ColorScheme.TEXT_COLOR);
+		return label;
+	}
+
+	static JLabel title(String text)
+	{
+		JLabel label = label(text);
+		label.setFont(label.getFont().deriveFont(Font.BOLD));
+		label.setForeground(Color.WHITE);
+		return label;
+	}
+
+	static JLabel muted(String text)
+	{
+		JLabel label = label(text);
+		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		return label;
+	}
+
+	static String escape(String text)
+	{
+		return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+	}
+}
+```
+
+`src/main/java/com/yamareviewer/adapter/ui/ReviewTab.java`:
+
+```java
+package com.yamareviewer.adapter.ui;
+
+import com.yamareviewer.domain.text.ReviewView;
+import com.yamareviewer.domain.text.ViewSection;
+import java.awt.Color;
+import java.awt.Component;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.JButton;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import net.runelite.client.ui.ColorScheme;
+
+/** One review: headline, status badge, Copy button, then the sections. Renders a ReviewView and nothing else. */
+final class ReviewTab extends JPanel
+{
+	private final Consumer<String> clipboard;
+	private final JButton copy = new JButton("Copy");
+	private String clipboardText;
+
+	ReviewTab(Consumer<String> clipboard, String emptyText)
+	{
+		this.clipboard = clipboard;
+		setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
+		setBackground(ColorScheme.DARK_GRAY_COLOR);
+		copy.setEnabled(false);
+		copy.addActionListener(event ->
+		{
+			if (clipboardText != null)
+			{
+				clipboard.accept(clipboardText);
+			}
+		});
+		removeAll();
+		add(TextLine.muted(emptyText));
+	}
+
+	void render(ReviewView view, String text)
+	{
+		clipboardText = text;
+		copy.setEnabled(true);
+		removeAll();
+		add(TextLine.title(view.getHeadline()));
+		JLabel status = TextLine.label(view.getStatus());
+		status.setOpaque(true);
+		status.setForeground(Color.BLACK);
+		status.setBackground("Complete".equals(view.getStatus()) ? ColorScheme.PROGRESS_COMPLETE_COLOR : ColorScheme.PROGRESS_INPROGRESS_COLOR);
+		add(status);
+		add(copy);
+		for (ViewSection section : view.getSections())
+		{
+			add(Box.createVerticalStrut(8));
+			add(TextLine.title(section.getTitle()));
+			if (section.getHiddenReason() != null)
+			{
+				add(TextLine.muted("Hidden: " + section.getHiddenReason()));
+			}
+			for (String line : section.getLines())
+			{
+				add(TextLine.label(line));
+			}
+		}
+		revalidate();
+		repaint();
+	}
+
+	JButton copyButton()
+	{
+		return copy;
+	}
+
+	List<String> texts()
+	{
+		List<String> texts = new ArrayList<>();
+		for (Component component : getComponents())
+		{
+			if (component instanceof JLabel)
+			{
+				Object plain = ((JLabel) component).getClientProperty(TextLine.PLAIN_TEXT);
+				if (plain != null)
+				{
+					texts.add(plain.toString());
+				}
+			}
+		}
+		return texts;
+	}
+}
+```
+
+`src/main/java/com/yamareviewer/adapter/ui/HistoryTab.java`:
+
+```java
+package com.yamareviewer.adapter.ui;
+
+import com.yamareviewer.domain.history.HistoryIndex;
+import com.yamareviewer.domain.history.HistoryKey;
+import com.yamareviewer.domain.history.HistoryView;
+import com.yamareviewer.domain.history.KillSummary;
+import com.yamareviewer.domain.model.Contract;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.text.HistoryFormatter;
+import com.yamareviewer.domain.text.ReviewView;
+import java.awt.Component;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.JButton;
+import javax.swing.JComboBox;
+import javax.swing.JComponent;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.SwingConstants;
+import net.runelite.client.ui.ColorScheme;
+
+/** One mode: a contract filter, the statistics of that mode and contract, the kill list, and the selected kill's review. */
+final class HistoryTab extends JPanel
+{
+	private static final List<Contract> FILTER = filterOrder();
+
+	private final Mode mode;
+	private final Consumer<String> opener;
+	private final JComboBox<String> filter = new JComboBox<>(FILTER.stream().map(Contract::displayName).toArray(String[]::new));
+	private final JPanel summary = column();
+	private final JPanel kills = column();
+	private final List<JButton> killButtons = new ArrayList<>();
+	private final ReviewTab selected;
+	private HistoryIndex index = new HistoryIndex(Map.of());
+
+	HistoryTab(Mode mode, Consumer<String> clipboard, Consumer<String> opener)
+	{
+		this.mode = mode;
+		this.opener = opener;
+		this.selected = new ReviewTab(clipboard, "Select a kill above to see its review");
+		setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
+		setBackground(ColorScheme.DARK_GRAY_COLOR);
+		filter.addActionListener(event -> renderKills());
+		add(TextLine.muted("Contract"));
+		add(filter);
+		add(summary);
+		add(Box.createVerticalStrut(8));
+		add(kills);
+		add(Box.createVerticalStrut(8));
+		add(selected);
+		renderKills();
+	}
+
+	void render(HistoryIndex history)
+	{
+		index = history;
+		renderKills();
+	}
+
+	void renderKill(ReviewView view, String clipboardText)
+	{
+		selected.render(view, clipboardText);
+	}
+
+	JComboBox<String> contractFilter()
+	{
+		return filter;
+	}
+
+	List<JButton> killButtons()
+	{
+		return List.copyOf(killButtons);
+	}
+
+	List<String> killIds()
+	{
+		return killButtons.stream().map(button -> button.getClientProperty(KILL_ID).toString()).collect(Collectors.toList());
+	}
+
+	ReviewTab selectedKill()
+	{
+		return selected;
+	}
+
+	List<String> texts()
+	{
+		List<String> texts = new ArrayList<>();
+		for (Component component : summary.getComponents())
+		{
+			if (component instanceof JLabel)
+			{
+				texts.add(((JLabel) component).getClientProperty(TextLine.PLAIN_TEXT).toString());
+			}
+		}
+		texts.addAll(selected.texts());
+		return texts;
+	}
+
+	private static final String KILL_ID = "yama-reviewer.kill-id";
+
+	private void renderKills()
+	{
+		Contract contract = FILTER.get(Math.max(0, filter.getSelectedIndex()));
+		Optional<HistoryView> view = index.view(new HistoryKey(mode, contract));
+		summary.removeAll();
+		kills.removeAll();
+		killButtons.clear();
+		List<String> lines = view.map(HistoryFormatter::summaryLines).orElse(List.of("No kills yet"));
+		for (String line : lines)
+		{
+			summary.add(TextLine.label(line));
+		}
+		if (view.isPresent())
+		{
+			for (KillSummary kill : view.get().getKills())
+			{
+				JButton button = new JButton(HistoryFormatter.killLine(kill));
+				button.setHorizontalAlignment(SwingConstants.LEFT);
+				button.putClientProperty(KILL_ID, kill.getKillId());
+				button.addActionListener(event -> opener.accept(kill.getKillId()));
+				killButtons.add(button);
+				kills.add(button);
+			}
+		}
+		revalidate();
+		repaint();
+	}
+
+	private static JPanel column()
+	{
+		JPanel panel = new JPanel();
+		panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+		panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		panel.setAlignmentX(JComponent.LEFT_ALIGNMENT);
+		return panel;
+	}
+
+	/** No contract first, then the contracts of spec 6.3.1 in order, then the unknown contract. */
+	private static List<Contract> filterOrder()
+	{
+		List<Contract> order = new ArrayList<>();
+		order.add(Contract.NONE);
+		for (Contract contract : Contract.values())
+		{
+			if (contract.shortName() != null)
+			{
+				order.add(contract);
+			}
+		}
+		order.add(Contract.UNKNOWN_CONTRACT);
+		return List.copyOf(order);
+	}
+}
+```
+
+- [ ] **Step 4: Write `ReviewPanel`, the icon, the clipboard and the opener**
+
+`src/main/java/com/yamareviewer/adapter/ui/ReviewPanel.java`:
+
+```java
+package com.yamareviewer.adapter.ui;
+
+import com.yamareviewer.domain.history.HistoryIndex;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.text.ReviewView;
+import java.awt.BorderLayout;
+import java.util.EnumMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.function.Consumer;
+import javax.swing.JComponent;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTabbedPane;
+import javax.swing.ScrollPaneConstants;
+import javax.swing.SwingUtilities;
+import net.runelite.client.ui.ColorScheme;
+import net.runelite.client.ui.PluginPanel;
+
+/**
+ * The side panel of spec 7.3: tabs Last kill, Solo, Duo host, Duo joiner; a contract filter per mode tab;
+ * a Copy button on every review; a footer reserved for Part 4's "Report a problem". It renders only
+ * ReviewView and HistoryView, and every public update hops to the Swing thread itself.
+ */
+public class ReviewPanel extends PluginPanel
+{
+	private final JTabbedPane tabs = new JTabbedPane();
+	private final ReviewTab lastKill;
+	private final Map<Mode, HistoryTab> modeTabs = new EnumMap<>(Mode.class);
+	private final JPanel footer = new JPanel(new BorderLayout());
+	private Consumer<String> killOpener = killId ->
+	{
+	};
+
+	public ReviewPanel(Consumer<String> clipboard)
+	{
+		super(false);
+		setLayout(new BorderLayout());
+		setBackground(ColorScheme.DARK_GRAY_COLOR);
+		lastKill = new ReviewTab(clipboard, "No kill reviewed yet");
+		tabs.addTab("Last kill", scroll(lastKill));
+		for (Mode mode : Mode.values())
+		{
+			HistoryTab tab = new HistoryTab(mode, clipboard, killId -> killOpener.accept(killId));
+			modeTabs.put(mode, tab);
+			tabs.addTab(tabTitle(mode), scroll(tab));
+		}
+		footer.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		add(tabs, BorderLayout.CENTER);
+		add(footer, BorderLayout.SOUTH);
+	}
+
+	/** Called with a kill id when the user selects a kill in a history tab. */
+	public void onKillSelected(Consumer<String> opener)
+	{
+		killOpener = opener;
+	}
+
+	/** Part 4 puts "Report a problem" here. */
+	public JPanel footer()
+	{
+		return footer;
+	}
+
+	public void show(ReviewView view, String clipboardText, HistoryIndex history)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			lastKill.render(view, clipboardText);
+			renderHistory(history);
+			tabs.setSelectedIndex(0);
+		});
+	}
+
+	public void showHistory(HistoryIndex history)
+	{
+		SwingUtilities.invokeLater(() -> renderHistory(history));
+	}
+
+	/** A past kill opened from a history tab, rendered inside that mode's tab. */
+	public void showKill(Mode mode, ReviewView view, String clipboardText)
+	{
+		SwingUtilities.invokeLater(() -> modeTabs.get(mode).renderKill(view, clipboardText));
+	}
+
+	ReviewTab lastKillTab()
+	{
+		return lastKill;
+	}
+
+	HistoryTab historyTab(Mode mode)
+	{
+		return modeTabs.get(mode);
+	}
+
+	private void renderHistory(HistoryIndex history)
+	{
+		modeTabs.values().forEach(tab -> tab.render(history));
+	}
+
+	private static JScrollPane scroll(JComponent content)
+	{
+		JScrollPane pane = new JScrollPane(content);
+		pane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+		pane.setBorder(null);
+		pane.getVerticalScrollBar().setUnitIncrement(16);
+		return pane;
+	}
+
+	private static String tabTitle(Mode mode)
+	{
+		String label = mode.label();
+		return label.substring(0, 1).toUpperCase(Locale.ROOT) + label.substring(1);
+	}
+}
+```
+
+`src/main/java/com/yamareviewer/adapter/ui/PanelIcon.java`:
+
+```java
+package com.yamareviewer.adapter.ui;
+
+import java.awt.BasicStroke;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.geom.Line2D;
+import java.awt.image.BufferedImage;
+import net.runelite.client.ui.ColorScheme;
+
+/** The navigation button icon, drawn at runtime with Java2D (no binary resource): an orange "Y" of two horns and a stem. */
+public final class PanelIcon
+{
+	static final int SIZE = 16;
+
+	private PanelIcon()
+	{
+	}
+
+	public static BufferedImage create()
+	{
+		BufferedImage image = new BufferedImage(SIZE, SIZE, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D graphics = image.createGraphics();
+		try
+		{
+			graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+			graphics.setColor(ColorScheme.BRAND_ORANGE);
+			graphics.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+			graphics.draw(new Line2D.Float(3, 2, 8, 8));
+			graphics.draw(new Line2D.Float(13, 2, 8, 8));
+			graphics.draw(new Line2D.Float(8, 8, 8, 14));
+		}
+		finally
+		{
+			graphics.dispose();
+		}
+		return image;
+	}
+}
+```
+
+`src/main/java/com/yamareviewer/adapter/ui/SystemClipboard.java`:
+
+```java
+package com.yamareviewer.adapter.ui;
+
+import java.awt.HeadlessException;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
+import lombok.extern.slf4j.Slf4j;
+
+/** The Copy button's target. */
+@Slf4j
+public final class SystemClipboard
+{
+	private SystemClipboard()
+	{
+	}
+
+	public static void copy(String text)
+	{
+		try
+		{
+			Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
+		}
+		catch (HeadlessException | IllegalStateException e)
+		{
+			log.warn("Could not copy the review to the clipboard", e);
+		}
+	}
+}
+```
+
+`src/main/java/com/yamareviewer/adapter/ui/KillReviewOpener.java`:
+
+```java
+package com.yamareviewer.adapter.ui;
+
+import com.yamareviewer.application.port.ReviewRepository;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.text.ClipboardExport;
+import com.yamareviewer.domain.text.ReviewFormatter;
+import java.io.IOException;
+import java.util.Optional;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import lombok.extern.slf4j.Slf4j;
+
+/** Loads a past kill's review on the executor and hands its view model to the panel (spec 7.3, "selecting a kill"). */
+@Slf4j
+public final class KillReviewOpener
+{
+	private final ExecutorService executor;
+	private final ReviewRepository reviews;
+	private final ReviewPanel panel;
+
+	public KillReviewOpener(ExecutorService executor, ReviewRepository reviews, ReviewPanel panel)
+	{
+		this.executor = executor;
+		this.reviews = reviews;
+		this.panel = panel;
+	}
+
+	public void open(String killId)
+	{
+		try
+		{
+			executor.execute(() -> openNow(killId));
+		}
+		catch (RejectedExecutionException e)
+		{
+			log.warn("Plugin stopped before kill {} could be opened", killId);
+		}
+	}
+
+	private void openNow(String killId)
+	{
+		try
+		{
+			Optional<KillReview> review = reviews.loadAll().stream().filter(candidate -> candidate.getKillId().equals(killId)).findFirst();
+			review.ifPresent(found -> panel.showKill(found.getMode(), ReviewFormatter.format(found), ClipboardExport.text(found)));
+		}
+		catch (IOException | RuntimeException e)
+		{
+			log.warn("Could not open review {}", killId, e);
+		}
+	}
+}
+```
+
+- [ ] **Step 5: Write `PanelReviewPublisher`**
+
+`src/main/java/com/yamareviewer/adapter/publish/PanelReviewPublisher.java`:
+
+```java
+package com.yamareviewer.adapter.publish;
+
+import com.yamareviewer.adapter.ui.ReviewPanel;
+import com.yamareviewer.application.port.ReviewPublisher;
+import com.yamareviewer.domain.history.HistoryIndex;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.text.ClipboardExport;
+import com.yamareviewer.domain.text.ReviewFormatter;
+
+/** Turns the review into immutable view models on the executor; the panel hops to the Swing thread itself. */
+public final class PanelReviewPublisher implements ReviewPublisher
+{
+	private final ReviewPanel panel;
+
+	public PanelReviewPublisher(ReviewPanel panel)
+	{
+		this.panel = panel;
+	}
+
+	@Override
+	public void publish(KillReview review, HistoryIndex history)
+	{
+		panel.show(ReviewFormatter.format(review), ClipboardExport.text(review), history);
+	}
+
+	@Override
+	public void showHistory(HistoryIndex history)
+	{
+		panel.showHistory(history);
+	}
+}
+```
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+Run: `./gradlew test --tests 'com.yamareviewer.adapter.ui.*' --tests 'com.yamareviewer.adapter.publish.PanelReviewPublisherTest'`
+Expected: PASS (9 tests). The Swing tests build components without a display; if the JVM reports `HeadlessException`, run them with `-Djava.awt.headless=true` (Gradle's default on servers) and never create a `JFrame` in a test.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/main/java/com/yamareviewer/adapter/ui src/main/java/com/yamareviewer/adapter/publish/PanelReviewPublisher.java src/test/java/com/yamareviewer/adapter/ui src/test/java/com/yamareviewer/adapter/publish/PanelReviewPublisherTest.java
+git commit -m "feat: add the review side panel with history tabs and copy"
+```
+
+---
+### Task 17: Config, plugin wiring and the silence replay test
+
+**Files:**
+- Create: `src/main/java/com/yamareviewer/ModeOverride.java`
+- Replace: `src/main/java/com/yamareviewer/YamaReviewerConfig.java`, `src/main/java/com/yamareviewer/YamaReviewerPlugin.java`
+- Test: `src/test/java/com/yamareviewer/SilenceReplayTest.java`
+
+**Interfaces:**
+- Consumes: everything from Tasks 12–16 and Part 1's recording classes.
+- Produces: `ModeOverride { AUTO, SOLO, DUO_HOST, DUO_JOINER }` with `mode()` (null for AUTO); the config keys of spec 10 (`chatPhaseLine`, `chatPrayerLine`, `chatFlareLine`, `chatSpecLine`, `chatDeathRecap`, `priceSource`, `modeOverride`, `historySize`, `rawLogsKept`, `captureMode`); the wired plugin with the navigation button, the `active` flag cleared first thing in `shutDown`, and the history loaded at start-up.
+
+- [ ] **Step 1: Write the failing silence test**
+
+`src/test/java/com/yamareviewer/SilenceReplayTest.java`:
+
+```java
+package com.yamareviewer;
+
+import com.google.gson.Gson;
+import com.yamareviewer.adapter.persistence.EventCodec;
+import com.yamareviewer.adapter.persistence.GsonLogRepository;
+import com.yamareviewer.adapter.persistence.GsonReviewRepository;
+import com.yamareviewer.adapter.persistence.InMemoryFileStore;
+import com.yamareviewer.adapter.recording.ActorResolver;
+import com.yamareviewer.adapter.recording.EventTranslator;
+import com.yamareviewer.adapter.recording.GameEventListener;
+import com.yamareviewer.adapter.recording.PositionReader;
+import com.yamareviewer.adapter.recording.TickSampler;
+import com.yamareviewer.application.command.KillSession;
+import com.yamareviewer.application.handler.KillEndedHandler;
+import com.yamareviewer.application.port.LogRepository;
+import com.yamareviewer.application.port.ReviewPublisher;
+import com.yamareviewer.application.port.ReviewRepository;
+import com.yamareviewer.domain.event.Actor;
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.event.SuppliesSnapshot;
+import com.yamareviewer.domain.event.TickState;
+import com.yamareviewer.domain.history.HistoryIndex;
+import com.yamareviewer.domain.ids.IdRegistry;
+import com.yamareviewer.domain.ids.Role;
+import com.yamareviewer.domain.ids.Rules;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.domain.projection.Projections;
+import com.yamareviewer.domain.projection.ReviewBuilder;
+import com.yamareviewer.domain.projection.ReviewSettings;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.testing.TestIds;
+import java.time.Clock;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import net.runelite.api.Client;
+import net.runelite.api.Hitsplat;
+import net.runelite.api.HitsplatID;
+import net.runelite.api.NPC;
+import net.runelite.api.Player;
+import net.runelite.api.events.AnimationChanged;
+import net.runelite.api.events.GameTick;
+import net.runelite.api.events.HitsplatApplied;
+import net.runelite.api.events.NpcDespawned;
+import net.runelite.api.events.NpcSpawned;
+import net.runelite.client.game.NpcUtil;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+/** Spec 4.4: a synthetic fight through GameEventListener publishes nothing until the kill has ended, then exactly one review. */
+public class SilenceReplayTest
+{
+	private final Client client = mock(Client.class);
+	private final Player self = mock(Player.class);
+	private final NPC yama = mock(NPC.class);
+	private final PositionReader positions = mock(PositionReader.class);
+	private final TickSampler sampler = mock(TickSampler.class);
+	private final NpcUtil npcUtil = mock(NpcUtil.class);
+	private final IdRegistry ids = TestIds.registry();
+	private final InMemoryFileStore files = new InMemoryFileStore();
+	private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> new Thread(r, "yama-reviewer-test"));
+	private final RecordingPublisher publisher = new RecordingPublisher();
+	private KillEndedHandler handler;
+	private GameEventListener listener;
+
+	@Before
+	public void setUp()
+	{
+		when(client.getLocalPlayer()).thenReturn(self);
+		when(self.getName()).thenReturn("Me");
+		when(positions.regionId(any())).thenReturn(TestIds.id(Role.YAMAS_DOMAIN));
+		when(yama.getId()).thenReturn(TestIds.id(Role.YAMA));
+		when(yama.getAnimation()).thenReturn(TestIds.id(Role.YAMA_STANDARD_ATTACK));
+		when(sampler.sample(anyInt(), any(), any())).thenAnswer(invocation ->
+			new TickState(invocation.getArgument(0), Set.of(), 99, 99, 100, 100, -1, null, null, null));
+
+		Gson gson = new Gson();
+		LogRepository logs = new GsonLogRepository(files, new EventCodec(gson));
+		ReviewRepository reviews = new GsonReviewRepository(files, gson);
+		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), ids, Rules.DEFAULT);
+		handler = new KillEndedHandler(executor, logs, reviews, builder, publisher, () -> true, () -> 20, () -> 50, () -> ReviewSettings.DEFAULT);
+		KillSession session = new KillSession(handler, (tick, kind) -> Optional.of(new SuppliesSnapshot(tick, kind, List.of())),
+			Clock.systemUTC(), () -> "kill-1", "0.2.0", ids.fingerprint(), () -> false);
+		ActorResolver actors = new ActorResolver(client, ids, session::partnerName);
+		EventTranslator translator = new EventTranslator(ids, actors, session::currentTick, () -> false, itemId -> "item", positions);
+		listener = new GameEventListener(client, ids, session, translator, sampler, positions, npcUtil, handler::pending);
+	}
+
+	@After
+	public void tearDown()
+	{
+		executor.shutdownNow();
+	}
+
+	private void drain() throws Exception
+	{
+		executor.submit(() ->
+		{
+		}).get(5, TimeUnit.SECONDS);
+	}
+
+	private HitsplatApplied hitOnSelf(int amount)
+	{
+		Hitsplat hitsplat = mock(Hitsplat.class);
+		when(hitsplat.getHitsplatType()).thenReturn(HitsplatID.DAMAGE_ME);
+		when(hitsplat.getAmount()).thenReturn(amount);
+		when(hitsplat.isMine()).thenReturn(false);
+		HitsplatApplied event = new HitsplatApplied();
+		event.setActor(self);
+		event.setHitsplat(hitsplat);
+		return event;
+	}
+
+	private AnimationChanged yamaAttacks()
+	{
+		AnimationChanged event = new AnimationChanged();
+		event.setActor(yama);
+		return event;
+	}
+
+	@Test
+	public void nothingIsPublishedBeforeTheKillEndsAndExactlyOneReviewAfter() throws Exception
+	{
+		listener.onNpcSpawned(new NpcSpawned(yama));
+		for (int tick = 0; tick < 40; tick++)
+		{
+			if (tick % 8 == 5)
+			{
+				listener.onAnimationChanged(yamaAttacks());
+			}
+			if (tick % 10 == 7)
+			{
+				listener.onHitsplatApplied(hitOnSelf(12));
+			}
+			listener.onGameTick(new GameTick());
+		}
+		drain();
+
+		assertEquals(0, publisher.published.size());
+		assertEquals(0, publisher.histories.size());
+		assertTrue(files.paths().isEmpty());
+
+		when(npcUtil.isDying(yama)).thenReturn(true);
+		listener.onNpcDespawned(new NpcDespawned(yama));
+		listener.onGameTick(new GameTick());
+		handler.pending().get(5, TimeUnit.SECONDS);
+
+		assertEquals(1, publisher.published.size());
+		KillReview review = publisher.published.get(0);
+		assertEquals("kill-1", review.getKillId());
+		assertEquals(EndReason.YAMA_DIED, review.getEndReason());
+		assertEquals(Mode.SOLO, review.getMode());
+		assertEquals(48, review.getDamage().value().total(Actor.SELF));
+		assertEquals(1, publisher.histories.size());
+		assertTrue(files.paths().stream().anyMatch(path -> path.startsWith("raw/")));
+		assertTrue(files.paths().stream().anyMatch(path -> path.startsWith("reviews/SOLO/")));
+	}
+
+	private static final class RecordingPublisher implements ReviewPublisher
+	{
+		private final List<KillReview> published = new CopyOnWriteArrayList<>();
+		private final List<HistoryIndex> histories = new CopyOnWriteArrayList<>();
+
+		@Override
+		public void publish(KillReview review, HistoryIndex history)
+		{
+			published.add(review);
+			histories.add(history);
+		}
+
+		@Override
+		public void showHistory(HistoryIndex history)
+		{
+			histories.add(history);
+		}
+	}
+}
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `./gradlew test --tests 'com.yamareviewer.SilenceReplayTest'`
+Expected: PASS (1 test). This is the end-to-end guard of spec 4.4 over parts that already exist (the Part 1 listener, the Task 15 handler, the standard projections); it is written here, before the wiring, so that the wiring below is checked against the same objects the test drives. If it fails, the review pipeline publishes during a fight or not at all: fix that before wiring the plugin.
+
+- [ ] **Step 3: Write `ModeOverride` and replace the config**
+
+`src/main/java/com/yamareviewer/ModeOverride.java`:
+
+```java
+package com.yamareviewer;
+
+import com.yamareviewer.domain.model.Mode;
+
+/** The modeOverride config value (spec 10). */
+public enum ModeOverride
+{
+	AUTO(null),
+	SOLO(Mode.SOLO),
+	DUO_HOST(Mode.DUO_HOST),
+	DUO_JOINER(Mode.DUO_JOINER);
+
+	private final Mode mode;
+
+	ModeOverride(Mode mode)
+	{
+		this.mode = mode;
+	}
+
+	/** Null for AUTO: detect the mode. */
+	public Mode mode()
+	{
+		return mode;
+	}
+}
+```
+
+`src/main/java/com/yamareviewer/YamaReviewerConfig.java`:
+
+```java
+package com.yamareviewer;
+
+import com.yamareviewer.domain.review.PriceMode;
+import net.runelite.client.config.Config;
+import net.runelite.client.config.ConfigGroup;
+import net.runelite.client.config.ConfigItem;
+import net.runelite.client.config.ConfigSection;
+import net.runelite.client.config.Range;
+
+@ConfigGroup(YamaReviewerConfig.GROUP)
+public interface YamaReviewerConfig extends Config
+{
+	String GROUP = "yamareviewer";
+
+	@ConfigSection(
+		name = "Chat summary",
+		description = "Which lines of the after-kill summary are printed in the chat",
+		position = 10
+	)
+	String chat = "chat";
+
+	@ConfigSection(
+		name = "Review",
+		description = "How kills are reviewed and kept",
+		position = 20
+	)
+	String review = "review";
+
+	@ConfigSection(
+		name = "Development",
+		description = "Settings used while capturing logging kills",
+		position = 100,
+		closedByDefault = true
+	)
+	String development = "development";
+
+	@ConfigItem(
+		keyName = "chatPhaseLine",
+		name = "Phase times",
+		description = "Kill time and the time of each phase",
+		position = 11,
+		section = chat
+	)
+	default boolean chatPhaseLine()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "chatPrayerLine",
+		name = "P3 prayers, crashes and waves",
+		description = "Prayer accuracy, crash lines and waves dodged",
+		position = 12,
+		section = chat
+	)
+	default boolean chatPrayerLine()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "chatFlareLine",
+		name = "Flares and damage",
+		description = "Flares killed and damage taken",
+		position = 13,
+		section = chat
+	)
+	default boolean chatFlareLine()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "chatSpecLine",
+		name = "Specs and supplies",
+		description = "Special attacks, drains and supply cost",
+		position = 14,
+		section = chat
+	)
+	default boolean chatSpecLine()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "chatDeathRecap",
+		name = "Death recap",
+		description = "After a death, the last ten ticks tick by tick",
+		position = 15,
+		section = chat
+	)
+	default boolean chatDeathRecap()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "priceSource",
+		name = "Supply prices",
+		description = "Price supplies at Grand Exchange or high alchemy value",
+		position = 21,
+		section = review
+	)
+	default PriceMode priceSource()
+	{
+		return PriceMode.GRAND_EXCHANGE;
+	}
+
+	@ConfigItem(
+		keyName = "modeOverride",
+		name = "Mode",
+		description = "Detect solo, duo host or duo joiner automatically, or force one",
+		position = 22,
+		section = review
+	)
+	default ModeOverride modeOverride()
+	{
+		return ModeOverride.AUTO;
+	}
+
+	@Range(min = 10, max = 500)
+	@ConfigItem(
+		keyName = "historySize",
+		name = "History size",
+		description = "How many kills are kept per mode and contract",
+		position = 23,
+		section = review
+	)
+	default int historySize()
+	{
+		return 50;
+	}
+
+	@Range(min = 1, max = 200)
+	@ConfigItem(
+		keyName = "rawLogsKept",
+		name = "Raw logs kept",
+		description = "How many recent kills keep their raw event log, so their reviews can be recalculated",
+		position = 24,
+		section = review
+	)
+	default int rawLogsKept()
+	{
+		return 20;
+	}
+
+	@ConfigItem(
+		keyName = "captureMode",
+		name = "Capture mode",
+		description = "Also record other actors and every animated object, for confirming IDs after a game update",
+		position = 101,
+		section = development
+	)
+	default boolean captureMode()
+	{
+		return false;
+	}
+}
+```
+
+- [ ] **Step 4: Replace the plugin**
+
+`src/main/java/com/yamareviewer/YamaReviewerPlugin.java`:
+
+```java
+package com.yamareviewer;
+
+import com.google.gson.Gson;
+import com.google.inject.Provides;
+import com.yamareviewer.adapter.ids.BuiltInIds;
+import com.yamareviewer.adapter.persistence.EventCodec;
+import com.yamareviewer.adapter.persistence.FileStore;
+import com.yamareviewer.adapter.persistence.FilepathFileStore;
+import com.yamareviewer.adapter.persistence.GsonLogRepository;
+import com.yamareviewer.adapter.persistence.GsonReviewRepository;
+import com.yamareviewer.adapter.publish.ChatReviewPublisherFactory;
+import com.yamareviewer.adapter.publish.CompositeReviewPublisher;
+import com.yamareviewer.adapter.publish.PanelReviewPublisher;
+import com.yamareviewer.adapter.recording.ActorResolver;
+import com.yamareviewer.adapter.recording.EventTranslator;
+import com.yamareviewer.adapter.recording.GameEventListener;
+import com.yamareviewer.adapter.recording.ItemLookup;
+import com.yamareviewer.adapter.recording.ItemManagerLookup;
+import com.yamareviewer.adapter.recording.PositionReader;
+import com.yamareviewer.adapter.recording.SnapshotReader;
+import com.yamareviewer.adapter.recording.TickSampler;
+import com.yamareviewer.adapter.ui.KillReviewOpener;
+import com.yamareviewer.adapter.ui.PanelIcon;
+import com.yamareviewer.adapter.ui.ReviewPanel;
+import com.yamareviewer.adapter.ui.SystemClipboard;
+import com.yamareviewer.application.command.KillSession;
+import com.yamareviewer.application.handler.HistoryLoader;
+import com.yamareviewer.application.handler.KillEndedHandler;
+import com.yamareviewer.application.port.LogRepository;
+import com.yamareviewer.application.port.ReviewPublisher;
+import com.yamareviewer.application.port.ReviewRepository;
+import com.yamareviewer.domain.ids.IdRegistry;
+import com.yamareviewer.domain.ids.Rules;
+import com.yamareviewer.domain.projection.Projections;
+import com.yamareviewer.domain.projection.ReviewBuilder;
+import com.yamareviewer.domain.projection.ReviewSettings;
+import com.yamareviewer.domain.text.ChatLineOptions;
+import java.time.Clock;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import javax.inject.Inject;
+import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.Client;
+import net.runelite.client.callback.ClientThread;
+import net.runelite.client.config.ConfigManager;
+import net.runelite.client.eventbus.EventBus;
+import net.runelite.client.game.ItemManager;
+import net.runelite.client.game.NpcUtil;
+import net.runelite.client.plugins.Plugin;
+import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.ui.ClientToolbar;
+import net.runelite.client.ui.NavigationButton;
+
+/** Composition root: builds the object graph, registers the listener and attaches the panel. No game logic lives here. */
+@Slf4j
+@PluginDescriptor(
+	name = "Yama Reviewer",
+	description = "Records Yama kills and reviews them after the kill ends. Silent during the fight.",
+	tags = {"yama", "pvm", "review", "prayer", "duo"},
+	internalName = "yama-reviewer"
+)
+public class YamaReviewerPlugin extends Plugin
+{
+	static final String VERSION = "0.2.0";
+
+	@Inject
+	private Client client;
+
+	@Inject
+	private ClientThread clientThread;
+
+	@Inject
+	private EventBus eventBus;
+
+	@Inject
+	private YamaReviewerConfig config;
+
+	@Inject
+	private Gson gson;
+
+	@Inject
+	private ItemManager itemManager;
+
+	@Inject
+	private NpcUtil npcUtil;
+
+	@Inject
+	private ClientToolbar clientToolbar;
+
+	@Inject
+	private ChatReviewPublisherFactory chatPublishers;
+
+	private final AtomicBoolean active = new AtomicBoolean();
+	private ExecutorService executor;
+	private KillSession session;
+	private GameEventListener listener;
+	private NavigationButton navigationButton;
+
+	@Provides
+	YamaReviewerConfig provideConfig(ConfigManager configManager)
+	{
+		return configManager.getConfig(YamaReviewerConfig.class);
+	}
+
+	@Override
+	protected void startUp() throws Exception
+	{
+		active.set(true);
+		executor = Executors.newSingleThreadExecutor(runnable ->
+		{
+			Thread thread = new Thread(runnable, "yama-reviewer");
+			thread.setDaemon(true);
+			return thread;
+		});
+		IdRegistry ids = BuiltInIds.registry();
+		FileStore files = new FilepathFileStore(getPluginDirectory());
+		LogRepository logs = new GsonLogRepository(files, new EventCodec(gson));
+		ReviewRepository reviews = new GsonReviewRepository(files, gson);
+		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), ids, Rules.DEFAULT);
+
+		ReviewPanel panel = new ReviewPanel(SystemClipboard::copy);
+		KillReviewOpener opener = new KillReviewOpener(executor, reviews, panel);
+		panel.onKillSelected(opener::open);
+		ReviewPublisher publisher = new CompositeReviewPublisher(List.of(
+			chatPublishers.create(this::chatLineOptions),
+			new PanelReviewPublisher(panel)));
+		KillEndedHandler handler = new KillEndedHandler(executor, logs, reviews, builder, publisher, active::get,
+			config::rawLogsKept, config::historySize, this::reviewSettings);
+
+		ItemLookup items = new ItemManagerLookup(itemManager);
+		session = new KillSession(handler, new SnapshotReader(client, items), Clock.systemUTC(),
+			() -> UUID.randomUUID().toString(), VERSION, ids.fingerprint(), config::captureMode);
+		PositionReader positions = new PositionReader(client);
+		ActorResolver actors = new ActorResolver(client, ids, session::partnerName);
+		EventTranslator translator = new EventTranslator(ids, actors, session::currentTick, config::captureMode, items::name, positions);
+		listener = new GameEventListener(client, ids, session, translator, new TickSampler(client, actors, positions),
+			positions, npcUtil, handler::pending);
+
+		navigationButton = NavigationButton.builder()
+			.tooltip("Yama Reviewer")
+			.icon(PanelIcon.create())
+			.priority(7)
+			.panel(panel)
+			.build();
+		clientToolbar.addNavigation(navigationButton);
+		eventBus.register(listener);
+		new HistoryLoader(executor, reviews, publisher, config::historySize).load();
+		log.debug("Yama Reviewer started");
+	}
+
+	@Override
+	protected void shutDown()
+	{
+		active.set(false);
+		clientToolbar.removeNavigation(navigationButton);
+		eventBus.unregister(listener);
+		KillSession ending = session;
+		ExecutorService stopping = executor;
+		clientThread.invoke(() ->
+		{
+			ending.leave();
+			stopping.shutdown();
+		});
+		log.debug("Yama Reviewer stopped");
+	}
+
+	private ChatLineOptions chatLineOptions()
+	{
+		return new ChatLineOptions(config.chatPhaseLine(), config.chatPrayerLine(), config.chatFlareLine(), config.chatSpecLine(),
+			config.chatDeathRecap());
+	}
+
+	private ReviewSettings reviewSettings()
+	{
+		return new ReviewSettings(config.priceSource(), config.modeOverride().mode());
+	}
+}
+```
+
+`ChatReviewPublisherFactory` is created by Guice through its `@Inject` constructor (a just-in-time binding), so the plugin never references `ChatMessageManager`. `clientToolbar.addNavigation` and `removeNavigation` hop to the Swing thread themselves. `active` is cleared before anything else in `shutDown`, so a review finishing on the executor afterwards is stored but not published.
+
+- [ ] **Step 5: Run the whole test suite, including the architecture rules**
+
+Run: `./gradlew test`
+Expected: PASS (every test of Parts 1 and 2, including `ArchitectureTest`'s 9 rules). If `onlyPublishTalksToChat` fails, a class outside `adapter.publish` references `ChatMessageManager`; if `onlyUiAndRootUseSwing` fails, a class outside `adapter.ui` and the root package imports Swing or `net.runelite.client.ui`; fix the dependency, never the rule.
+
+- [ ] **Step 6: Check in game (the user does this; never automate game input)**
+
+Run `./gradlew run`, log in following https://github.com/runelite/runelite/wiki/Using-Jagex-Accounts, and enable **Yama Reviewer**.
+
+Check:
+1. The sidebar shows the orange "Y" button; the panel has the tabs Last kill, Solo, Duo host, Duo joiner and says "No kill reviewed yet".
+2. Do a solo kill. During the fight nothing appears in chat or in the panel (open it and watch: it must not change).
+3. When Yama dies, four chat lines appear (phase times, `P3 prayers n/a…`, flares and damage, `Specs n/a. Supplies …`) and the Last kill tab shows the review with a green "Complete" badge (or orange "Incomplete" with the hidden sections named).
+4. Copy puts the review text on the clipboard; paste it somewhere: no player names.
+5. The Solo tab lists the kill; selecting it shows its review below the list; the contract filter switches to an empty list for a contract.
+6. `~/.runelite/plugin-data/yama-reviewer/reviews/SOLO/` holds one `.json` file; `./gradlew replay --args="<the raw log>"` prints the same review.
+7. Die once: the chat shows the phase line with "died in …", and with **Death recap** enabled in the config the recap block follows; the panel shows the recap on top.
+8. Disable the plugin mid-fight: nothing is printed; a raw log ending in `LEFT` is written.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/main/java/com/yamareviewer/ModeOverride.java src/main/java/com/yamareviewer/YamaReviewerConfig.java src/main/java/com/yamareviewer/YamaReviewerPlugin.java src/test/java/com/yamareviewer/SilenceReplayTest.java
+git commit -m "feat: wire the review pipeline, the side panel and the chat summary into the plugin"
+```
+
+---
+## Self-Review
+
+**Spec coverage (spec 13, part 2):**
+
+- 4.3–4.5 flow, threading, lifecycle: `KillEndedHandler` does save → build → save review → history → publish on the executor, checks `active` (Task 15); `startUp` only builds objects and submits `HistoryLoader.load()`; `shutDown` clears `active` first (Task 17); publishers hop to Swing inside `ReviewPanel` (Task 16) and use the thread-safe `ChatMessageManager.queue` (Task 15). Failure isolation per projection: `ReviewBuilder` (Task 5).
+- 4.4 silence: `SilenceReplayTest` drives `GameEventListener` and asserts zero publishes before the end and exactly one after (Task 17); the ArchUnit rules stay unchanged and `ChatReviewPublisherFactory` keeps `ChatMessageManager` inside `adapter.publish` (Task 15).
+- 5.3 scene reloads: Judge and flare despawn/respawn pairs inside `LOADING` are ignored (Tasks 6, 8).
+- 5.4 mode rules including override, the no-entry-choice east/west fallback and "seen before the first Judge ends" (Task 7).
+- 6.1 ordered projections, `Section` reasons, review status rule, prices from snapshots (Tasks 1, 3, 5, 12).
+- 6.2 phases: all four signals, earliest wins, Judge end, early end, P3 at `FightEnded` (Task 6).
+- 6.3 contracts: detection order (widget text, item within the first ticks, 7-tick P1 cycle → `UNKNOWN_CONTRACT`, else `NONE`), `ContractRules` with every 6.3.1 value, history key per mode and contract (Tasks 2, 7, 13).
+- 6.8 flares: waves within 3 ticks, summoned/melee cause, exploded via animation, heal graphic or heal hitsplat, killed via death animation or dying despawn, purging staff kills (only when the role is captured), Yama's healing, per-wave ticks (Task 8).
+- 6.10 rules 2 and 5–10 with their windows, per phase/player/source totals and shared mechanics; rules 1, 3, 4 have marked insertion points for Part 3 (Task 9).
+- 6.11 supplies: decreases only, dose grouping and pricing, price source, `LEFT` without `END` → `NOT_APPLICABLE`, Familiar "no effect" (Task 10).
+- 6.12 death recap: 10 ticks including the death tick, sources, HP/prayer, run energy under Forfeit Breath, target, consumed items (Task 11).
+- 7.1 publishing only while active, 7.2 chat lines with `n/a`, the contract in line 1, the recap block (Tasks 14, 15), 7.3 panel tabs, contract filter, status badge, recap on top, hidden reasons, history statistics with bests and trend arrows, selecting a kill, Copy (Tasks 14, 16), 7.4 clipboard text without names (Task 14), 7.5 review storage with `reviewSchemaVersion`, pruning per mode and contract, history built at start-up and after each kill (Tasks 12, 13).
+- 10 config keys and defaults (Task 17). 11 error handling: corrupt review files renamed, write failures still publish, exceptions caught per projection, `LEFT` on disable (Tasks 5, 12, 15, 17). 12 test DSL, silence test and the `replay` tool (Tasks 4, 14, 17).
+- Not in Part 2 by design: spec 7.5's rebuild of reviews of another schema version from their raw logs (the `HistoryLoader` signature has no `LogRepository`; with `SCHEMA_VERSION = 1` no such file can exist yet), spec 8 health checks and spec 9 reports (Part 4), and the sections of 6.4–6.7 and 6.9 (Part 3).
+
+**Placeholder scan:** no "TBD", "TODO", "similar to Task", or "add error handling" anywhere; every step that touches code shows the whole file, and the Task 15 stopgap shows the exact line it replaces.
+
+**Type consistency:** `Section.ok/hidden/isOk/value/asOptional/hiddenReason/map`, `SectionKey.of`, `Sections.*`, `ProjectionContext.ids/rules/settings/contractRules/section/value/put`, `ReviewBuilder.run(KillLog, ReviewSettings)`, `KillReviewAssembler.assemble`, `Projections.standard()`, `KillReview.builder()…allSections()/withRecomputedStatus()`, `ReviewRepository.save/loadAll/prune`, `ReviewPublisher.publish/showHistory`, `HistoryProjector.summarize/index`, `HistoryIndex.view`, `ReviewFormatter.format/headline/section`, `ChatLines.lines`, `ClipboardExport.text`, `HistoryFormatter.summaryLines/killLine`, `Formats.*`, `ReviewPanel.show/showHistory/showKill/onKillSelected/footer`, `KillReviewOpener.open`, `KillEndedHandler(9 args).killEnded/pending/handle`, `HistoryLoader.load`, `TestIds.registry/registryWithout/id/text`, `KillLogBuilder.*` and `Reviews.builder/sample` are used with the same names and signatures in every task that consumes them (checked task by task against the **Interfaces** blocks).
+
+**Review Focus:** each of the five lines names its test, and each test is in the task listed: `aPlayerSeenAfterTheFirstJudgeEndedIsNotAPartner` (Task 7), `aSceneReloadInsideAJudgePhaseIsIgnored` (Task 6) and `aSceneReloadDoesNotRespawnAFlare` (Task 8), `endOnlyPotionVariantsCountAsRemainingDoses` (Task 10), `otherSchemaVersionsAreSkippedButKept` and `corruptFileIsRenamedAndSkipped` (Task 12) with `aLeftKillWithoutAnEndSnapshotHidesSupplies` (Task 10), `nothingIsPublishedWhenThePluginIsInactive` (Task 15) and `hiddenValuesPrintAsNotAvailable` (Task 14).
