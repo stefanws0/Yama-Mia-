@@ -10,6 +10,7 @@ import com.yamareviewer.domain.ids.Rules;
 import com.yamareviewer.domain.model.KillHeader;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.projection.KillReviewAssembler;
+import com.yamareviewer.domain.projection.ProjectionContext;
 import com.yamareviewer.domain.projection.Projections;
 import com.yamareviewer.domain.projection.ReviewBuilder;
 import com.yamareviewer.domain.projection.ReviewSettings;
@@ -28,33 +29,35 @@ import java.util.Optional;
 import java.util.zip.GZIPInputStream;
 
 /**
- * Development tool: reviews a raw log with the built-in IDs and default rules and prints the review as
- * text, or as JSON with --json (the expected-review fixtures of Part 3's golden tests are made this way).
+ * Development tool: prints the review of a raw log with the built-in IDs and default rules, and with a
+ * second argument writes the review JSON that the golden test compares against. Keeps Part 2's
+ * read(Path), review(KillLog, IdRegistry) and text(ReviewView), which Part 2's ReplayTest uses.
  */
 public final class Replay
 {
+	public static final Gson GSON = new GsonBuilder().serializeNulls().setPrettyPrinting().create();
+
 	private Replay()
 	{
 	}
 
 	public static void main(String[] args) throws IOException
 	{
-		if (args.length < 1 || args.length > 2 || (args.length == 2 && !args[1].equals("--json")))
+		if (args.length < 1 || args.length > 2)
 		{
-			System.err.println("Usage: ./gradlew replay --args=\"<path to raw/*.jsonl.gz> [--json]\"");
+			System.err.println("Usage: ./gradlew replay --args=\"<raw log .jsonl.gz> [<expected .review.json>]\"");
 			System.exit(1);
 		}
-		KillReview review = review(read(Path.of(args[0])), BuiltInIds.registry());
+		KillReview review = review(read(Path.of(args[0])));
+		System.out.print(text(ReviewFormatter.format(review)));
 		if (args.length == 2)
 		{
-			System.out.println(new GsonBuilder().setPrettyPrinting().create().toJson(review));
-		}
-		else
-		{
-			System.out.print(text(ReviewFormatter.format(review)));
+			Files.write(Path.of(args[1]), json(review).getBytes(StandardCharsets.UTF_8));
+			System.out.println("Wrote " + args[1]);
 		}
 	}
 
+	/** Part 2's reader, unchanged: the header line, then one event per line; unknown events are counted as skipped. */
 	public static KillLog read(Path file) throws IOException
 	{
 		String text;
@@ -86,10 +89,22 @@ public final class Replay
 		return KillLog.of(header, events, skipped);
 	}
 
+	/** Exactly what the plugin computes for this log with the built-in IDs, without health checks (Part 4 adds those). */
+	public static KillReview review(KillLog log)
+	{
+		return review(log, BuiltInIds.registry());
+	}
+
 	public static KillReview review(KillLog log, IdRegistry ids)
 	{
 		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), ids, Rules.DEFAULT);
-		return KillReviewAssembler.assemble(log, builder.run(log, ReviewSettings.DEFAULT));
+		ProjectionContext context = builder.run(log, ReviewSettings.DEFAULT);
+		return KillReviewAssembler.assemble(log, context);
+	}
+
+	public static String json(KillReview review)
+	{
+		return GSON.toJson(review);
 	}
 
 	public static String text(ReviewView view)

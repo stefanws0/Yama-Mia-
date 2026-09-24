@@ -80,3 +80,8 @@ tasks.register('replay', JavaExec) {
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = 'com.yamareviewer.tools.Replay'
 }
+
+tasks.register('scrubFixture', JavaExec) {
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.yamareviewer.tools.FixtureScrubber'
+}
