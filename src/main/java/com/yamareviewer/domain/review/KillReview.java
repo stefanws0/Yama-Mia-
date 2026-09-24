@@ -3,6 +3,7 @@ package com.yamareviewer.domain.review;
 import com.yamareviewer.domain.event.EndReason;
 import com.yamareviewer.domain.model.Contract;
 import com.yamareviewer.domain.model.Mode;
+import java.util.ArrayList;
 import java.util.List;
 import lombok.Builder;
 import lombok.Value;
@@ -32,6 +33,12 @@ public class KillReview
 	Section<FlareSummary> flares;
 	Section<SupplySummary> supplies;
 	Section<DeathRecap> deathRecap;
+	Section<PrayerReview> prayerReview;
+	Section<Opener> opener;
+	Section<TickLog> tickLog;
+	Section<CrashSummary> crashes;
+	Section<WaveSummary> waves;
+	Section<SpecSummary> specs;
 
 	public Section<PhaseTimes> getPhases()
 	{
@@ -58,10 +65,52 @@ public class KillReview
 		return orHidden(deathRecap);
 	}
 
-	/** Every shown section, in display order. */
+	public Section<PrayerReview> getPrayerReview()
+	{
+		return orHidden(prayerReview);
+	}
+
+	public Section<Opener> getOpener()
+	{
+		return orHidden(opener);
+	}
+
+	public Section<TickLog> getTickLog()
+	{
+		return orHidden(tickLog);
+	}
+
+	public Section<CrashSummary> getCrashes()
+	{
+		return orHidden(crashes);
+	}
+
+	public Section<WaveSummary> getWaves()
+	{
+		return orHidden(waves);
+	}
+
+	public Section<SpecSummary> getSpecs()
+	{
+		return orHidden(specs);
+	}
+
+	/** Every shown section, in display order (spec 7.3). */
 	public List<Section<?>> allSections()
 	{
-		return List.of(getPhases(), getDamage(), getFlares(), getSupplies(), getDeathRecap());
+		List<Section<?>> sections = new ArrayList<>();
+		sections.add(getPhases());
+		sections.add(getDamage());
+		sections.add(getOpener());
+		sections.add(getPrayerReview());
+		sections.add(getCrashes());
+		sections.add(getWaves());
+		sections.add(getFlares());
+		sections.add(getSpecs());
+		sections.add(getSupplies());
+		sections.add(getTickLog());
+		sections.add(getDeathRecap());
+		return sections;
 	}
 
 	/** INCOMPLETE when any section is hidden for HEALTH_CHECK_FAILED or ERROR, or skippedEvents > 0. */

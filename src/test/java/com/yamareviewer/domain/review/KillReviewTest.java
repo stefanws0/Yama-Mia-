@@ -19,7 +19,8 @@ public class KillReviewTest
 	{
 		KillReview review = review().build();
 
-		assertEquals(List.of(review.getPhases(), review.getDamage(), review.getFlares(), review.getSupplies(), review.getDeathRecap()),
+		assertEquals(List.of(review.getPhases(), review.getDamage(), review.getOpener(), review.getPrayerReview(), review.getCrashes(),
+			review.getWaves(), review.getFlares(), review.getSpecs(), review.getSupplies(), review.getTickLog(), review.getDeathRecap()),
 			review.allSections());
 	}
 
@@ -43,6 +44,6 @@ public class KillReviewTest
 		KillReview review = review().deathRecap(null).build();
 
 		assertEquals(Section.hidden(HiddenReason.NOT_APPLICABLE), review.getDeathRecap());
-		assertEquals(5, review.allSections().size());
+		assertEquals(11, review.allSections().size());
 	}
 }

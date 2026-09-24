@@ -32,6 +32,12 @@ public final class KillReviewAssembler
 			.flares(context.section(Sections.FLARES))
 			.supplies(context.section(Sections.SUPPLIES))
 			.deathRecap(context.section(Sections.DEATH_RECAP))
+			.prayerReview(context.section(Sections.PRAYER_REVIEW))
+			.opener(context.section(Sections.OPENER))
+			.tickLog(context.section(Sections.TICK_LOG))
+			.crashes(context.section(Sections.CRASHES))
+			.waves(context.section(Sections.WAVES))
+			.specs(context.section(Sections.SPECS))
 			.build()
 			.withRecomputedStatus();
 	}
