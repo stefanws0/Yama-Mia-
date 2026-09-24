@@ -29,8 +29,10 @@ import com.yamareviewer.domain.event.SupplyItem;
 import com.yamareviewer.domain.event.TickState;
 import com.yamareviewer.domain.event.VarbitObserved;
 import com.yamareviewer.domain.event.WidgetTextObserved;
+import com.yamareviewer.domain.ids.Role;
 import com.yamareviewer.domain.model.KillHeader;
 import com.yamareviewer.domain.model.KillLog;
+import com.yamareviewer.domain.model.Style;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -256,6 +258,70 @@ public final class KillLogBuilder
 	{
 		partnerPosition = new Position(x, y, 0);
 		return this;
+	}
+
+	/** Yama's standard attack animation plus the cast graphic of the style, both at the cursor tick. */
+	public KillLogBuilder yamaCasts(Style style)
+	{
+		yamaAnimates(TestIds.id(Role.YAMA_STANDARD_ATTACK));
+		return graphicOn(Actor.YAMA, TestIds.id(style == Style.MAGIC ? Role.YAMA_CAST_MAGIC : Role.YAMA_CAST_RANGED));
+	}
+
+	/** The impact graphic of the style on the player it hit. */
+	public KillLogBuilder impactOn(Actor target, Style style)
+	{
+		return graphicOn(target, TestIds.id(style == Style.MAGIC ? Role.IMPACT_MAGIC : Role.IMPACT_RANGED));
+	}
+
+	/** Three CRASH_FIREBALL ground graphics in a row: (x-1, y), (x, y), (x+1, y). */
+	public KillLogBuilder crashLine(int centreX, int centreY)
+	{
+		int fireball = TestIds.id(Role.CRASH_FIREBALL);
+		groundGraphic(fireball, centreX - 1, centreY);
+		groundGraphic(fireball, centreX, centreY);
+		return groundGraphic(fireball, centreX + 1, centreY);
+	}
+
+	public KillLogBuilder crashImpactOn(Actor player)
+	{
+		return graphicOn(player, TestIds.id(Role.CRASH_IMPACT));
+	}
+
+	public KillLogBuilder waveOn(Actor player)
+	{
+		return graphicOn(player, TestIds.id(Role.SHADOW_WAVE));
+	}
+
+	public KillLogBuilder waveAt(int x, int y)
+	{
+		return groundGraphic(TestIds.id(Role.SHADOW_WAVE), x, y);
+	}
+
+	public KillLogBuilder prayersDisabledMessage()
+	{
+		return message(TestIds.text(Role.PRAYER_DISABLED_MESSAGE));
+	}
+
+	/** A glyph object spawning: GLYPH_FIRE or GLYPH_SHADOW. */
+	public KillLogBuilder glyph(Role glyph, int x, int y)
+	{
+		return objectSpawns(TestIds.id(glyph), x, y);
+	}
+
+	/** A SPEC_* animation on a player. */
+	public KillLogBuilder specAnimation(Actor actor, Role spec)
+	{
+		return animates(actor, TestIds.id(spec));
+	}
+
+	public KillLogBuilder judgeSpawns()
+	{
+		return npcSpawns(Actor.JUDGE, TestIds.id(Role.JUDGE));
+	}
+
+	public KillLogBuilder judgeDespawns()
+	{
+		return npcDespawns(Actor.JUDGE, TestIds.id(Role.JUDGE), true);
 	}
 
 	/** Appends the cursor tick's TickState and advances the cursor. */
