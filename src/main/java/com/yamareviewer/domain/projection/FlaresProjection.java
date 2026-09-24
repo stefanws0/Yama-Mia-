@@ -229,11 +229,6 @@ public final class FlaresProjection implements Projection<FlareSummary>
 
 	private static FlareWave wave(List<FlareResult> flares, int fightEnd)
 	{
-		int lastDespawn = fightEnd;
-		for (FlareResult flare : flares)
-		{
-			lastDespawn = Math.max(flares.get(0).getSpawnTick(), flare.getDespawnTick() == null ? fightEnd : flare.getDespawnTick());
-		}
 		int firstSpawn = flares.get(0).getSpawnTick();
 		int last = firstSpawn;
 		for (FlareResult flare : flares)
