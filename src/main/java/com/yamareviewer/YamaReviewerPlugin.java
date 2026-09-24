@@ -6,6 +6,8 @@ import com.yamareviewer.adapter.ids.BuiltInIds;
 import com.yamareviewer.adapter.persistence.EventCodec;
 import com.yamareviewer.adapter.persistence.FilepathFileStore;
 import com.yamareviewer.adapter.persistence.GsonLogRepository;
+import com.yamareviewer.adapter.persistence.GsonReviewRepository;
+import com.yamareviewer.adapter.publish.CompositeReviewPublisher;
 import com.yamareviewer.adapter.recording.ActorResolver;
 import com.yamareviewer.adapter.recording.EventTranslator;
 import com.yamareviewer.adapter.recording.GameEventListener;
@@ -18,7 +20,12 @@ import com.yamareviewer.application.command.KillSession;
 import com.yamareviewer.application.handler.KillEndedHandler;
 import com.yamareviewer.application.port.LogRepository;
 import com.yamareviewer.domain.ids.IdRegistry;
+import com.yamareviewer.domain.ids.Rules;
+import com.yamareviewer.domain.projection.Projections;
+import com.yamareviewer.domain.projection.ReviewBuilder;
+import com.yamareviewer.domain.projection.ReviewSettings;
 import java.time.Clock;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -87,7 +94,9 @@ public class YamaReviewerPlugin extends Plugin
 		});
 		IdRegistry ids = BuiltInIds.registry();
 		LogRepository logs = new GsonLogRepository(new FilepathFileStore(getPluginDirectory()), new EventCodec(gson));
-		KillEndedHandler handler = new KillEndedHandler(executor, logs, config::rawLogsKept);
+		KillEndedHandler handler = new KillEndedHandler(executor, logs, new GsonReviewRepository(new FilepathFileStore(getPluginDirectory()), gson),
+			new ReviewBuilder(Projections.standard(), ids, Rules.DEFAULT), new CompositeReviewPublisher(List.of()), () -> false,
+			config::rawLogsKept, () -> 50, () -> ReviewSettings.DEFAULT);
 		ItemLookup items = new ItemManagerLookup(itemManager);
 
 		session = new KillSession(handler, new SnapshotReader(client, items), Clock.systemUTC(),
