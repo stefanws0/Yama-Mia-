@@ -231,7 +231,7 @@ Events record observations with raw IDs. None of them contains a classification.
   - `PLAYER_DIED`: `ActorDeath` of the local player.
   - `LEFT`: leaving the region, `LOGIN_SCREEN`, `HOPPING`, or the plugin shutting down.
   - The `END` supplies snapshot is taken as soon as the end is seen (before death drops items), and only while logged in. The end is then completed on the next game tick, after that tick's `TickState`, so the death recap includes the death tick. When no further tick will come (logout, shutdown) it completes immediately.
-- **Recording self-check:** if an NPC named "Yama" spawns with an ID the plugin doesn't know while armed, no kill can be recorded, so a report is written (section 9).
+- **Recording self-check:** if an NPC named "Yama" spawns with an ID that has no NPC role while armed, no kill can be recorded, so a report is written (section 9). Yama sitting on his throne (`NpcID.YAMA_THRONE_OCCUPIED`, role `YAMA_SITTING`) is also named "Yama" and is excluded.
 
 ### 5.4 Mode detection
 
@@ -549,7 +549,7 @@ Config group `yamareviewer`.
 - **Drain tests:** the pinned numbers of 6.9.
 - **Candidate finder tests:** renumber one role's ID in a synthetic kill and assert the new ID ranks first.
 - **Silence tests:** section 4.4.
-- **Golden tests (after the logging kills):** trimmed captured logs in `src/test/resources/fixtures/` with the expected review JSON next to them. They confirm every "unconfirmed" role mapping in 5.5.
+- **Golden tests (after the logging kills):** trimmed captured logs in `src/test/resources/fixtures/` with the expected review JSON next to them. Before a log is committed, a scrubber replaces player names and drops `OTHER`-actor events (design rule 7). They confirm every "unconfirmed" role mapping in 5.5.
 - **Tools:** `captureSummary` (IDs per actor with counts, first and last tick and the most common gap, next to the gameval name of known constants) and `replay` (prints the review of a raw log). Both are Gradle tasks in the test source set.
 
 ## 13. Delivery

@@ -12,18 +12,18 @@
 
 ## Part 3 types this plan uses, and the few remaining assumptions
 
-Part 3's plan is complete, so these are its real names (`docs/superpowers/plans/2026-09-24-yama-reviewer-part3-p3-and-specs.md`, Tasks 2, 3, 8, 11, 13, 16): `Sections.ATTACKS` (`SectionKey<AttackTimeline>`), `Sections.CRASHES` (`SectionKey<CrashSummary>`), `Sections.SPECS` (`SectionKey<SpecSummary>`), `Sections.PRAYER_REVIEW`, `Sections.OPENER`, `Sections.TICK_LOG`; `Attack(castTick, phase, style, target, landingTick, damage)` (Lombok `@Value`; `style`, `target`, `landingTick`, `damage` nullable); `AttackTimeline(attacks)` with `inPhase(Phase)`; `CrashLine(tick, phase, player, set, indexInSet, centre, hit, damage)` and `CrashSummary(lines)`; `SpecResult(tick, phase, user, weapon, animationSeen, target, outcome, damage, energyUsed, hpRestored, prayerRestored)` where `weapon` is a `domain.drain.SpecWeapon` (`weaponRole()`, `specRole()`, `displayName()`) or null for an OTHER_WEAPON spec, and `SpecSummary(specs, ...)` with `ownSpecs()`; `PrayerReviewProjection.checkTick(Attack, Rules)` (package-private: the cast tick, or under HITSPLAT the landing tick when there is one, plus the offset; `PrayerCheckTick` of Task 2 mirrors it); the test helpers `KillLogBuilder.yamaCasts(Style)`, `impactOn(Actor, Style)`, `crashLine(int, int)`, `specAnimation(Actor, Role)`, `judgeSpawns()`, `judgeDespawns()`, the P3-skeleton fixture `com.yamareviewer.testing.Fights` (`P3_START = 40`) and `TestContext.empty()`; `Replay.review(KillLog)` in the test tools, serialising with `serializeNulls()`.
+Part 3's plan is complete, so these are its real names (`docs/superpowers/plans/2026-09-24-yama-reviewer-part3-p3-and-specs.md`, Tasks 2, 3, 8, 11, 13, 16): `Sections.ATTACKS` (`SectionKey<AttackTimeline>`), `Sections.CRASHES` (`SectionKey<CrashSummary>`), `Sections.SPECS` (`SectionKey<SpecSummary>`), `Sections.PRAYER_REVIEW`, `Sections.OPENER`, `Sections.TICK_LOG`; `Attack(castTick, phase, style, target, landingTick, damage)` (Lombok `@Value`; `style`, `target`, `landingTick`, `damage` nullable); `AttackTimeline(attacks)` with `inPhase(Phase)`; `CrashLine(tick, phase, player, set, indexInSet, centre, hit, damage)` and `CrashSummary(lines)`; `SpecResult(tick, phase, user, weapon, animationSeen, target, outcome, damage, energyUsed, hpRestored, prayerRestored)` where `weapon` is a `domain.drain.SpecWeapon` (`weaponRole()`, `specRole()`, `displayName()`) or null for an OTHER_WEAPON spec, and `SpecSummary(specs, ...)` with `ownSpecs()`; `PrayerReviewProjection.checkTick(Attack, Rules)` (package-private: the cast tick, or under HITSPLAT the landing tick when there is one, plus the offset; `PrayerCheckTick` of Task 2 mirrors it); the test helpers `KillLogBuilder.yamaCasts(Style)`, `impactOn(Actor, Style)`, `crashLine(int, int)`, `specAnimation(Actor, Role)`, `judgeSpawns()`, `judgeDespawns()`, the P3-skeleton fixture `com.yamareviewer.testing.Fights` (`P3_START = 40`) and `TestContext.empty()`; `Replay.review(KillLog)` in the test tools, serialising with `serializeNulls()`; Part 3's `Replay` also keeps Part 2's `read(Path)`, `review(KillLog, IdRegistry)` and `text(ReviewView)`, and its `main` prints with `System.out.print(text(ReviewFormatter.format(review)))`.
 
 Part 4's own fixture is therefore called `CheckFights` (Task 2): whole synthetic kills with 40-tick phases that the standard projections read end to end, built on Part 3's builder helpers. It is not Part 3's `Fights` skeleton.
 
-What is still assumed about Part 2 (check before Task 2; where a name differs, change the Part 4 code, never Part 2):
+What Part 4 relies on from Part 2 (each point checked against the Part 2 plan's code; if the code has changed since, change the Part 4 code, never Part 2):
 
-1. `KillLogBuilder.end(reason)` adds no END supplies snapshot; `CheckFights.finish` adds `supplies(SnapshotKind.END)` itself.
-2. `KillReviewAssembler.assemble` returns a review whose status is already computed; Part 4 calls `withRecomputedStatus()` again after setting `failedChecks`, which is harmless.
-3. `ReviewFormatter.format` collects its `ViewSection`s in a local mutable list called `sections` (Part 3 Task 15 inserts into it too; Task 10 says what to do when it is immutable).
-4. `ReviewPanel` reserved a footer container (the brief: "footer reserved for Part 4's Report a problem"); Task 12 calls it `footerSlot` and says how to add one when Part 2 left no container. `ReviewPanel.show(ReviewView, String, HistoryIndex)` is where each new review arrives.
-5. The Part 2 `YamaReviewerPlugin.startUp` has locals `files` (the `FilepathFileStore`), `ids`, `executor`, `panel` (the `ReviewPanel`) and the `KillEndedHandler` and `GameEventListener` constructor calls of the brief; Task 12 shows what to append to them.
-6. Part 2's `KillEndedHandlerTest` and the silence replay test construct `KillEndedHandler` and `GameEventListener` with the brief's constructors; Tasks 10 and 11 append arguments to those calls.
+1. `KillLogBuilder.end(reason)` (checked) adds an END supplies snapshot, a copy of the START one, when the log has none and the reason is not `LEFT`; `CheckFights.finish` adds `supplies(SnapshotKind.END)` itself, so `end` adds no second one, and `SuppliesSnapshotCheckTest.aMissingEndSnapshotFails` appends the `FightEnded` by hand to get a log without an END snapshot.
+2. `KillReviewAssembler.assemble` (checked) ends with `.build().withRecomputedStatus()`, so its review's status is already computed; Part 4 calls `withRecomputedStatus()` again after setting `failedChecks`, which is harmless.
+3. `ReviewFormatter.format` (checked) collects its `ViewSection`s in `List<ViewSection> sections = new ArrayList<>()` and returns `new ReviewView(headline(review), status(review), List.copyOf(sections))`; Part 3 Task 15 inserts its sections into the same list.
+4. `ReviewPanel` reserved a footer container (checked: Part 2's `private final JPanel footer = new JPanel(new BorderLayout())` at `BorderLayout.SOUTH`, with the accessor `footer()`); Task 12 fills it and names its own field `reportFooter`. `ReviewPanel.show(ReviewView, String, HistoryIndex)` is where each new review arrives.
+5. The Part 2 `YamaReviewerPlugin.startUp` (checked) has the locals `files` (`FileStore files = new FilepathFileStore(getPluginDirectory())`), `ids`, `builder` and `panel` (the `ReviewPanel`, followed by `panel.onKillSelected(opener::open)`), uses the field `executor`, and makes the `KillEndedHandler` and `GameEventListener` constructor calls of the brief; Task 12 shows what to append to them.
+6. Part 2's `KillEndedHandlerTest` and the silence replay test `SilenceReplayTest` (checked) construct `KillEndedHandler` (nine arguments, ending `() -> ReviewSettings.DEFAULT`) and `GameEventListener` (eight arguments, ending `handler::pending`) with the brief's constructors; Tasks 10 and 11 append arguments to those calls.
 
 Everything else this plan uses from Part 2 is binding in the brief: `Section<T>`, `HiddenReason`, `ProjectionContext`, `ReviewBuilder`, `Projections.standard()`, `KillReviewAssembler`, `KillReview` (`toBuilder()`, `withRecomputedStatus()`), `PhaseTimes`/`PhaseSpan`, `DamageSummary`, `ContractRules`, `Contract`, `Mode`, `Phase`, `Style`, `ReviewSettings`, `ReviewRepository`, `ReviewPublisher`, `HistoryProjector`, `ReviewFormatter`/`ReviewView`/`ViewSection`, `KillLogBuilder`, `TestIds`.
 
@@ -593,12 +593,12 @@ public final class HealthCheckRunner
 	{
 	}
 
-	public static List<CheckOutcome> apply(KillLog log, ProjectionContext context, List<HealthCheck> checks)
+	public static List<CheckOutcome> apply(KillLog kill, ProjectionContext context, List<HealthCheck> checks)
 	{
 		List<CheckOutcome> outcomes = new ArrayList<>();
 		for (HealthCheck check : checks)
 		{
-			CheckResult result = run(check, log, context);
+			CheckResult result = run(check, kill, context);
 			if (!result.passed())
 			{
 				for (SectionKey<?> key : check.hides())
@@ -611,7 +611,7 @@ public final class HealthCheckRunner
 		return List.copyOf(outcomes);
 	}
 
-	private static CheckResult run(HealthCheck check, KillLog log, ProjectionContext context)
+	private static CheckResult run(HealthCheck check, KillLog kill, ProjectionContext context)
 	{
 		try
 		{
@@ -624,7 +624,7 @@ public final class HealthCheckRunner
 			{
 				return CheckResult.skipped("every section it protects is already hidden");
 			}
-			return check.check(log, context);
+			return check.check(kill, context);
 		}
 		catch (RuntimeException e)
 		{
@@ -1563,6 +1563,7 @@ public class PhaseOrderCheckTest
 package com.yamareviewer.domain.health;
 
 import com.yamareviewer.domain.contract.ContractRules;
+import com.yamareviewer.domain.event.DomainEvent;
 import com.yamareviewer.domain.event.EndReason;
 import com.yamareviewer.domain.event.FightEnded;
 import com.yamareviewer.domain.event.FightStarted;
@@ -1578,6 +1579,7 @@ import com.yamareviewer.domain.projection.ReviewSettings;
 import com.yamareviewer.domain.projection.Sections;
 import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.TestIds;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalInt;
 import java.util.Set;
@@ -1600,7 +1602,12 @@ public class SuppliesSnapshotCheckTest
 	@Test
 	public void aMissingEndSnapshotFails()
 	{
-		CheckResult result = check.check(CheckFights.solo().ticks(5).end(EndReason.YAMA_DIED), context);
+		// KillLogBuilder.end adds an END snapshot when there is none, so the kill is ended by hand.
+		KillLog unfinished = CheckFights.solo().ticks(5).build();
+		List<DomainEvent> events = new ArrayList<>(unfinished.getEvents());
+		events.add(new FightEnded(5, EndReason.YAMA_DIED));
+
+		CheckResult result = check.check(KillLog.of(unfinished.getHeader(), events, 0), context);
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("END"));
@@ -3396,7 +3403,7 @@ public final class HealthChecks
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `./gradlew test --tests 'com.yamareviewer.domain.health.*'`
-Expected: PASS (67 tests: everything in `domain.health` so far). `linesAreCountedPerPlayer` depends on Part 3 attributing lines to the nearest player; if only that test fails, check `CrashesProjection` against spec 6.6 before touching the check.
+Expected: PASS (76 tests: everything in `domain.health` so far). `linesAreCountedPerPlayer` depends on Part 3 attributing lines to the nearest player; if only that test fails, check `CrashesProjection` against spec 6.6 before touching the check.
 
 - [ ] **Step 5: Commit**
 
@@ -4154,7 +4161,7 @@ public class ReportWriterTest
 
 		List<String> lines = text.substring(text.indexOf("Events (")).lines().collect(Collectors.toList());
 		assertEquals(201, lines.size());
-		assertTrue(lines.get(0), lines.get(0).contains("lines 54-253 of 304 events, around tick 150"));
+		assertTrue(lines.get(0), lines.get(0).contains("lines 54-253 of 306 events, around tick 150"));
 		assertTrue(lines.get(1), lines.get(1).startsWith("  50 tick "));
 		assertTrue(lines.get(200), lines.get(200).startsWith("  249 tick "));
 	}
@@ -5266,7 +5273,7 @@ public final class ProblemReporter
 		this.clock = clock;
 	}
 
-	public Optional<String> reportFailedChecks(KillLog log, ProjectionContext context, List<CheckOutcome> outcomes)
+	public Optional<String> reportFailedChecks(KillLog kill, ProjectionContext context, List<CheckOutcome> outcomes)
 	{
 		try
 		{
@@ -5276,16 +5283,16 @@ public final class ProblemReporter
 				if (outcome.failed())
 				{
 					Set<Role> roles = outcome.getCheck().reportRoles();
-					candidates.add(new CheckCandidates(outcome.name(), roles, candidatesFor(log, roles)));
+					candidates.add(new CheckCandidates(outcome.name(), roles, candidatesFor(kill, roles)));
 				}
 			}
-			ProblemReport report = ProblemReport.forFailedChecks(versions.get(), log,
+			ProblemReport report = ProblemReport.forFailedChecks(versions.get(), kill,
 				context.value(Sections.MODE).orElse(null), context.value(Sections.CONTRACT).orElse(null), outcomes, candidates);
 			return write(report);
 		}
 		catch (RuntimeException e)
 		{
-			log.warn("Could not build the report for kill {}", log.getHeader().getKillId(), e);
+			log.warn("Could not build the report for kill {}", kill.getHeader().getKillId(), e);
 			return Optional.empty();
 		}
 	}
@@ -5308,11 +5315,11 @@ public final class ProblemReporter
 		}
 	}
 
-	private List<Candidate> candidatesFor(KillLog log, Set<Role> roles)
+	private List<Candidate> candidatesFor(KillLog kill, Set<Role> roles)
 	{
 		try
 		{
-			return CandidateFinder.find(log, ids, roles);
+			return CandidateFinder.find(kill, ids, roles);
 		}
 		catch (RuntimeException e)
 		{
@@ -5865,7 +5872,7 @@ Keep any private helper Part 2 added to this class only if a Part 2 test still c
 
 - [ ] **Step 5: Update the Part 2 call sites**
 
-In `src/test/java/com/yamareviewer/application/handler/KillEndedHandlerTest.java` (Part 2) and in the Part 2 silence replay test, every `new KillEndedHandler(executor, logs, reviews, builder, publisher, active, rawLogsKept, historySize, settings)` gets two arguments appended: `, List.of(), new ProblemReporter(fakeReports, TestIds.registry(), () -> new Versions("0.1.0", "test", "0"), Clock.systemUTC())`, where `fakeReports` is a `ReportRepository` that stores nothing:
+In `src/test/java/com/yamareviewer/application/handler/KillEndedHandlerTest.java` (Part 2) and in the Part 2 silence replay test, every `new KillEndedHandler(executor, logs, reviews, builder, publisher, active, rawLogsKept, historySize, settings)` gets two arguments appended: `, List.of(), new ProblemReporter(NO_REPORTS, TestIds.registry(), () -> new Versions("0.1.0", "test", "0"), Clock.systemUTC())`, where `NO_REPORTS` is a `ReportRepository` that stores nothing, added to each of the two test classes:
 
 ```java
 	private static final ReportRepository NO_REPORTS = new ReportRepository()
@@ -5883,7 +5890,7 @@ In `src/test/java/com/yamareviewer/application/handler/KillEndedHandlerTest.java
 	};
 ```
 
-Add the imports `com.yamareviewer.application.port.ReportRepository`, `com.yamareviewer.domain.diagnosis.Versions`, `com.yamareviewer.testing.TestIds`, `java.time.Clock`, `java.util.List`, `java.util.Optional` where they are missing.
+Add the imports `com.yamareviewer.application.port.ReportRepository`, `com.yamareviewer.domain.diagnosis.Versions`, `com.yamareviewer.testing.TestIds`, `java.time.Clock`, `java.util.List`, `java.util.Optional` where they are missing, and `com.yamareviewer.application.handler.ProblemReporter` in the silence replay test (package `com.yamareviewer`).
 
 In `src/test/java/com/yamareviewer/tools/Replay.java` (Part 3, Task 16) add this method next to `review(KillLog)`:
 
@@ -5896,18 +5903,18 @@ In `src/test/java/com/yamareviewer/tools/Replay.java` (Part 3, Task 16) add this
 	}
 ```
 
-and in `main`, after `print(ReviewFormatter.format(review));`, insert:
+and in `main`, after `System.out.print(text(ReviewFormatter.format(review)));`, insert:
 
 ```java
 		System.out.println();
 		System.out.println("== Health checks");
-		for (CheckOutcome outcome : checks(RawLogs.read(Path.of(args[0]))))
+		for (CheckOutcome outcome : checks(read(Path.of(args[0]))))
 		{
 			System.out.println("  " + outcome.name() + ": " + outcome.getResult());
 		}
 ```
 
-with the imports `com.yamareviewer.domain.health.CheckOutcome`, `com.yamareviewer.domain.health.HealthCheckRunner`, `com.yamareviewer.domain.health.HealthChecks` and `java.util.List`. `Replay.review(log)` and `Replay.json` are unchanged, so the golden fixtures of Part 3 Task 16 compare the same review as before. Note that `Replay.GSON` serialises nulls: a fixture generated before this task lacks the `failedChecks` key, one generated after it holds `"failedChecks": null`, so generate (or regenerate) the fixtures after this task.
+with the imports `com.yamareviewer.domain.health.CheckOutcome`, `com.yamareviewer.domain.health.HealthCheckRunner` and `com.yamareviewer.domain.health.HealthChecks` (Part 3's `Replay` already imports `java.util.List`, `BuiltInIds`, `Rules`, `Projections`, `ReviewBuilder` and `ReviewSettings`). `Replay.review(log)` and `Replay.json` are unchanged, so the golden fixtures of Part 3 Task 16 compare the same review as before. Note that `Replay.GSON` serialises nulls: a fixture generated before this task lacks the `failedChecks` key, one generated after it holds `"failedChecks": null`, so generate (or regenerate) the fixtures after this task.
 
 - [ ] **Step 6: Show the failed checks in `ReviewFormatter`**
 
@@ -6465,33 +6472,33 @@ public class ReportProblemFooter extends JPanel
 
 - [ ] **Step 4: Put the footer into `ReviewPanel`**
 
-In `src/main/java/com/yamareviewer/adapter/ui/ReviewPanel.java` (Part 2). Part 2 reserved a footer container (assumption 4 at the top); the code below calls it `footerSlot`: use the name Part 2 chose (`grep -n footer src/main/java/com/yamareviewer/adapter/ui/ReviewPanel.java` shows it). If Part 2 reserved no container, add the field `private final JPanel footerSlot = new JPanel(new BorderLayout());` with `footerSlot.setBackground(ColorScheme.DARK_GRAY_COLOR);` and add it last in the constructor: `add(footerSlot, BorderLayout.SOUTH)` when the panel's layout is a `BorderLayout`, plain `add(footerSlot)` when it is the `PluginPanel` default `DynamicGridLayout`.
+In `src/main/java/com/yamareviewer/adapter/ui/ReviewPanel.java` (Part 2). Part 2 reserved the footer container `private final JPanel footer = new JPanel(new BorderLayout());`, added at `BorderLayout.SOUTH` of the panel and exposed through `footer()`; the "Report a problem" footer goes into it. The new field is therefore called `reportFooter`, so it does not clash with Part 2's `footer`.
 
 Add the field:
 
 ```java
-	private ReportProblemFooter footer;
+	private ReportProblemFooter reportFooter;
 ```
 
 Add the method:
 
 ```java
 	/** Part 4: the "Report a problem" footer. Called once by the plugin, on the Swing thread, before the panel is shown. */
-	public void attachFooter(ReportProblemFooter footer)
+	public void attachFooter(ReportProblemFooter reportFooter)
 	{
-		this.footer = footer;
-		footerSlot.removeAll();
-		footerSlot.add(footer, BorderLayout.CENTER);
-		footerSlot.revalidate();
-		footer.refresh();
+		this.reportFooter = reportFooter;
+		footer.removeAll();
+		footer.add(reportFooter, BorderLayout.CENTER);
+		footer.revalidate();
+		reportFooter.refresh();
 	}
 
 	@Override
 	public void onActivate()
 	{
-		if (footer != null)
+		if (reportFooter != null)
 		{
-			footer.refresh();
+			reportFooter.refresh();
 		}
 	}
 ```
@@ -6499,9 +6506,9 @@ Add the method:
 At the end of `show(ReviewView view, String clipboardText, HistoryIndex history)` (outside its `invokeLater` block; `refresh()` is thread-safe) add:
 
 ```java
-		if (footer != null)
+		if (reportFooter != null)
 		{
-			footer.refresh();
+			reportFooter.refresh();
 		}
 ```
 

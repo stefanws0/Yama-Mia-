@@ -1687,9 +1687,10 @@ Expected: FAIL — `cannot find symbol` for `yamaCasts`, `crashLine`, `Fights`.
 
 - [ ] **Step 3: Add the helper methods to `KillLogBuilder`**
 
-Add these imports to `src/test/java/com/yamareviewer/testing/KillLogBuilder.java` if they are missing (`Actor` and `Role` are already imported by Part 2's code):
+Add these imports to `src/test/java/com/yamareviewer/testing/KillLogBuilder.java` (Part 2's code already imports `Actor`, but not `Role` or `Style`):
 
 ```java
+import com.yamareviewer.domain.ids.Role;
 import com.yamareviewer.domain.model.Style;
 ```
 
@@ -1913,6 +1914,7 @@ git commit -m "test: add P3 helpers to the kill log DSL and a fight skeleton"
 - Modify: `src/main/java/com/yamareviewer/domain/review/KillReview.java` (six fields, getters, `allSections()`)
 - Modify: `src/main/java/com/yamareviewer/domain/projection/KillReviewAssembler.java` (six builder lines)
 - Test: `src/test/java/com/yamareviewer/domain/review/KillReviewP3Test.java`, `src/test/java/com/yamareviewer/domain/projection/KillReviewAssemblerP3Test.java`
+- Modify: `src/test/java/com/yamareviewer/domain/review/KillReviewTest.java` (Part 2; the section list grows to eleven)
 
 **Interfaces:**
 - Consumes: `KillReview` builder (Part 2), `KillReviewAssembler.assemble(KillLog, ProjectionContext)`, `Section`, `HiddenReason`, `Sections` (Task 2), `TestContext` (Task 3).
@@ -2122,15 +2124,71 @@ In `src/main/java/com/yamareviewer/domain/projection/KillReviewAssembler.java`, 
 			.specs(context.section(Sections.SPECS))
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [ ] **Step 5: Update Part 2's `KillReviewTest`**
+
+Two of its assertions list Part 2's five sections; `allSections()` now has eleven. Replace `src/test/java/com/yamareviewer/domain/review/KillReviewTest.java` with:
+
+```java
+package com.yamareviewer.domain.review;
+
+import com.yamareviewer.domain.model.Contract;
+import com.yamareviewer.domain.model.Mode;
+import com.yamareviewer.testing.Reviews;
+import java.util.List;
+import static org.junit.Assert.assertEquals;
+import org.junit.Test;
+
+public class KillReviewTest
+{
+	private static KillReview.KillReviewBuilder review()
+	{
+		return Reviews.builder("kill-1", 1_000L, Mode.SOLO, Contract.NONE);
+	}
+
+	@Test
+	public void sectionsAreListedInDisplayOrder()
+	{
+		KillReview review = review().build();
+
+		assertEquals(List.of(review.getPhases(), review.getDamage(), review.getOpener(), review.getPrayerReview(), review.getCrashes(),
+			review.getWaves(), review.getFlares(), review.getSpecs(), review.getSupplies(), review.getTickLog(), review.getDeathRecap()),
+			review.allSections());
+	}
+
+	@Test
+	public void onlyHealthCheckFailuresErrorsAndSkippedEventsMakeAReviewIncomplete()
+	{
+		assertEquals(ReviewStatus.COMPLETE, review().build().withRecomputedStatus().getStatus());
+		assertEquals(ReviewStatus.COMPLETE,
+			review().flares(Section.hidden(HiddenReason.IDS_NOT_CAPTURED)).supplies(Section.hidden(HiddenReason.NOT_APPLICABLE))
+				.damage(Section.hidden(HiddenReason.CONTRACT)).build().withRecomputedStatus().getStatus());
+		assertEquals(ReviewStatus.INCOMPLETE,
+			review().flares(Section.hidden(HiddenReason.ERROR)).build().withRecomputedStatus().getStatus());
+		assertEquals(ReviewStatus.INCOMPLETE,
+			review().phases(Section.hidden(HiddenReason.HEALTH_CHECK_FAILED)).build().withRecomputedStatus().getStatus());
+		assertEquals(ReviewStatus.INCOMPLETE, review().skippedEvents(1).build().withRecomputedStatus().getStatus());
+	}
+
+	@Test
+	public void aSectionMissingFromAStoredReviewReadsAsNotApplicable()
+	{
+		KillReview review = review().deathRecap(null).build();
+
+		assertEquals(Section.hidden(HiddenReason.NOT_APPLICABLE), review.getDeathRecap());
+		assertEquals(11, review.allSections().size());
+	}
+}
+```
+
+- [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `./gradlew test --tests 'com.yamareviewer.domain.review.KillReviewP3Test' --tests 'com.yamareviewer.domain.projection.KillReviewAssemblerP3Test' --tests 'com.yamareviewer.domain.review.*' --tests 'com.yamareviewer.domain.projection.*'`
 Expected: PASS, including every Part 2 test of those packages (the assembler still fills every Part 2 field).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/main/java/com/yamareviewer/domain/review/KillReview.java src/main/java/com/yamareviewer/domain/projection/KillReviewAssembler.java src/test/java/com/yamareviewer/domain/review/KillReviewP3Test.java src/test/java/com/yamareviewer/domain/projection/KillReviewAssemblerP3Test.java
+git add src/main/java/com/yamareviewer/domain/review/KillReview.java src/main/java/com/yamareviewer/domain/projection/KillReviewAssembler.java src/test/java/com/yamareviewer/domain/review/KillReviewP3Test.java src/test/java/com/yamareviewer/domain/review/KillReviewTest.java src/test/java/com/yamareviewer/domain/projection/KillReviewAssemblerP3Test.java
 git commit -m "feat: add the P3 sections to KillReview and the assembler"
 ```
 
@@ -3283,8 +3341,9 @@ public class PrayerReviewProjectionTest
 		kill.prayers().yamaCasts(Style.RANGED).ticks(7);
 		kill.yamaCasts(Style.MAGIC).ticks(1);
 		kill.prayers(ProtectionPrayer.MAGIC).ticks(6);
-		kill.yamaCasts(Style.RANGED).ticks(7);
-		kill.prayers().yamaCasts(Style.MAGIC).ticks(1);
+		kill.yamaCasts(Style.RANGED).ticks(1);
+		kill.prayers().ticks(6);
+		kill.yamaCasts(Style.MAGIC).ticks(1);
 		KillLog log = kill.end(EndReason.YAMA_DIED);
 
 		PrayerReview review = review(log, TestContext.withPhases(69));
@@ -3362,7 +3421,7 @@ public class PrayerReviewProjectionTest
 	@Test
 	public void checkTickPastTheEndOfTheLogScoresNoPrayer()
 	{
-		KillLog log = Fights.throughToP3().prayers(ProtectionPrayer.MAGIC).yamaCasts(Style.MAGIC).end(EndReason.PLAYER_DIED);
+		KillLog log = Fights.throughToP3().yamaCasts(Style.MAGIC).end(EndReason.PLAYER_DIED);
 		Rules offset = Rules.DEFAULT.toBuilder().prayerCheckOffset(2).build();
 
 		PrayerReview review = review(log, TestContext.withPhases(offset, 40));
@@ -5439,6 +5498,7 @@ git commit -m "feat: detect special attacks and model Yama's drains"
 - Create: `src/main/java/com/yamareviewer/domain/projection/P3DamageSources.java`
 - Modify: `src/main/java/com/yamareviewer/domain/projection/DamageAttributionProjection.java`, `src/main/java/com/yamareviewer/domain/projection/Projections.java`
 - Test: `src/test/java/com/yamareviewer/domain/projection/ProjectionsP3Test.java`, `src/test/java/com/yamareviewer/domain/projection/DamageAttributionP3Test.java`
+- Delete: `src/test/java/com/yamareviewer/domain/projection/ProjectionsTest.java` (Part 2; superseded by `ProjectionsP3Test`)
 
 **Interfaces:**
 - Consumes: `ReviewBuilder`, `Projections.standard()`, `DamageSummary.bySource`, `DamageSource` (Part 2), every projection of Tasks 5–13, `CrashesProjection.standardLandings` (Task 11).
@@ -5599,24 +5659,24 @@ public final class P3DamageSources
 
 - [ ] **Step 4: Call it from `DamageAttributionProjection`**
 
-Part 2's `DamageAttributionProjection.project` walks every damage hitsplat on `SELF` or `PARTNER` and picks its source with one method that tries rule 2 (melee, within 2 ticks after `YAMA_MELEE`) first and rules 5–10 after it. Make these changes, keeping Part 2's code for those rules exactly as it is:
+Part 2's `DamageAttributionProjection.rules(KillLog, ProjectionContext)` returns the ordered `List<SourceRule>` (`SourceRule` is `Optional<DamageSource> apply(HitsplatObserved hit)`) that `project` walks for every damage hitsplat on a player, first answer wins; it starts with rule 2 (melee) and holds two placeholder comments for this part. Keep Part 2's rules exactly as they are and make three edits in `rules`:
 
-1. At the top of `project`, before the loop over hitsplats, build the helper: `P3DamageSources p3 = new P3DamageSources(context);` and pass it to the source-picking method (add a parameter of type `P3DamageSources`).
-2. In the source-picking method, insert rule 1 before Part 2's rule 2, and rules 3 and 4 between Part 2's rule 2 and rule 5, so the method reads:
+1. Right after `List<SourceRule> rules = new ArrayList<>();`, build the helper:
 
 ```java
-		Optional<DamageSource> standard = p3.standard(hitsplat);
-		if (standard.isPresent())
-		{
-			return standard.get();
-		}
-		// Part 2's rule 2 (MELEE / MELEE_SPLASH), unchanged
-		Optional<DamageSource> crashOrWave = p3.crashOrWave(hitsplat);
-		if (crashOrWave.isPresent())
-		{
-			return crashOrWave.get();
-		}
-		// Part 2's rules 5-10, unchanged
+		P3DamageSources p3 = new P3DamageSources(context);
+```
+
+2. Replace the comment `// Part 3: rule 1, STANDARD (the landing hitsplat of a standard attack), goes here.` (before the melee rule) with:
+
+```java
+		rules.add(p3::standard);
+```
+
+3. Replace the comment `// Part 3: rules 3 and 4, SHADOW_CRASH and SHADOW_WAVE, go here.` (after the melee rule, before the flare rule) with:
+
+```java
+		rules.add(p3::crashOrWave);
 ```
 
 `requiredRoles()` of the projection stays as Part 2 defined it: the P3 sections are optional evidence.
@@ -5647,10 +5707,12 @@ Replace the body of `Projections.standard()` in `src/main/java/com/yamareviewer/
 	}
 ```
 
+Delete Part 2's `src/test/java/com/yamareviewer/domain/projection/ProjectionsTest.java` (`git rm`): it asserts Part 2's seven keys, and `ProjectionsP3Test` now asserts the full order of spec 6.1.
+
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `./gradlew test --tests 'com.yamareviewer.domain.projection.*'`
-Expected: PASS, including Part 2's `DamageAttributionProjectionTest` (rules 2 and 5–10 are untouched) and Part 2's `ProjectionsTest` if it asserted the old order (update that assertion to the fifteen keys above; it is the only Part 2 test whose expectation legitimately changes).
+Expected: PASS, including Part 2's `DamageAttributionProjectionTest` (rules 2 and 5–10 are untouched).
 
 - [ ] **Step 7: Commit**
 
@@ -5668,6 +5730,7 @@ git commit -m "feat: attribute standard, crash and wave damage and finalise the 
 - Modify: `src/main/java/com/yamareviewer/domain/text/ReviewFormatter.java`, `ChatLines.java`, `ClipboardExport.java`, `src/main/java/com/yamareviewer/domain/history/HistoryProjector.java`
 - Create: `src/test/java/com/yamareviewer/testing/P3Reviews.java`
 - Test: `src/test/java/com/yamareviewer/domain/text/P3TextTest.java`, `src/test/java/com/yamareviewer/domain/text/P3TextIntegrationTest.java`, `src/test/java/com/yamareviewer/domain/history/HistoryProjectorP3Test.java`
+- Modify: `src/test/java/com/yamareviewer/domain/text/ReviewFormatterTest.java`, `ClipboardExportTest.java` (Part 2; the section order and the clipboard text gain the Part 3 sections)
 
 **Interfaces:**
 - Consumes: `KillReview`, `ViewSection`, `ReviewView`, `ReviewFormatter.format`, `ChatLines.lines`, `ChatLineOptions`, `ClipboardExport.text`, `HistoryProjector.summarize`, `KillSummary` (Part 2), every result type of Task 2.
@@ -6465,48 +6528,42 @@ public final class P3Text
 
 - [ ] **Step 4: Call it from the Part 2 text classes and the history projector**
 
-`src/main/java/com/yamareviewer/domain/text/ChatLines.java`: Part 2's `lines(review, options)` appends line 2 (behind `options.isPrayerLine()`) and line 4 (behind `options.isSpecLine()`) with `n/a` placeholders for the prayer, crash, wave and spec values. Replace the expression that builds line 2 with:
+`src/main/java/com/yamareviewer/domain/text/ChatLines.java`: Part 2's `lines(review, options)` appends line 2 with `lines.add(prayerLine(review));` (behind `options.isPrayerLine()`), where Part 2's `static String prayerLine(KillReview)` returns the `n/a` placeholders, and line 4 with `specLine(review)`, which returns `"Specs: " + NOT_AVAILABLE + ". Supplies " + supplies + "."`. Replace the line-2 call with:
 
 ```java
 			lines.add(P3Text.prayerLine(review));
 ```
 
-and the `"Specs: n/a"` part of line 4 with `"Specs: " + P3Text.specFragment(review)`, keeping Part 2's `". Supplies …"` tail exactly as it is, so line 4 reads `Specs: Def 225→145 in P1 (3/3 Emberlight). Supplies 318k.`.
+and delete Part 2's placeholder `prayerLine` method (nothing else calls it). In `specLine`, replace `"Specs: " + NOT_AVAILABLE` with `"Specs: " + P3Text.specFragment(review)`, keeping Part 2's `". Supplies …"` tail exactly as it is, so line 4 reads `Specs: Def 225→145 in P1 (3/3 Emberlight). Supplies 318k.`; update the method's comment to that example.
 
-`src/main/java/com/yamareviewer/domain/text/ReviewFormatter.java`: `format` builds its `List<ViewSection>` in display order (death recap when you died, phase times, damage). Insert the Part 3 sections so the final order is the one of spec 7.3:
+`src/main/java/com/yamareviewer/domain/text/ReviewFormatter.java`: `format` builds `List<ViewSection> sections` in display order (death recap when you died, phases, damage taken, flares, supplies). Insert the Part 3 sections so the final order is the one of spec 7.3; the method body then reads:
 
 ```java
-		// after the damage section
+		List<ViewSection> sections = new ArrayList<>();
+		if (review.getEndReason() == EndReason.PLAYER_DIED || review.getDeathRecap().isOk())
+		{
+			sections.add(section("Death recap", review.getDeathRecap(), ReviewFormatter::deathRecapLines));
+		}
+		sections.add(section("Phases", review.getPhases(), ReviewFormatter::phaseLines));
+		sections.add(section("Damage taken", review.getDamage(), damage -> damageLines(damage, review.getMode())));
 		sections.add(P3Text.opener(review));
 		sections.add(P3Text.prayerTimeline(review));
 		sections.add(P3Text.crashLines(review));
 		sections.add(P3Text.waves(review));
-		// Part 2's flares section
+		sections.add(section("Flares", review.getFlares(), ReviewFormatter::flareLines));
 		sections.add(P3Text.specs(review));
-		// Part 2's supplies section
+		sections.add(section("Supplies", review.getSupplies(), ReviewFormatter::supplyLines));
 		sections.add(P3Text.tickLog(review));
+		return new ReviewView(headline(review), status(review), List.copyOf(sections));
 ```
 
-(`sections` is Part 2's list variable; use its actual name.)
-
-`src/main/java/com/yamareviewer/domain/text/ClipboardExport.java`: `text` joins the chat lines (all options on), supplies, and the death recap. After the chat lines, add the spec efficiency block (spec 7.4):
+`src/main/java/com/yamareviewer/domain/text/ClipboardExport.java`: `text` joins the chat lines (all options on) and then copies the panel sections named in `COPIED_SECTIONS`, each as a blank line, its title and its lines (or `n/a (<reason>)` when hidden). Spec 7.4 puts the spec efficiency between the chat lines and the supplies, so add the specs section's title at the front of that list:
 
 ```java
-		ViewSection specs = P3Text.specs(review);
-		text.append("Specs and drains").append('\n');
-		if (specs.getHiddenReason() != null)
-		{
-			text.append(specs.getHiddenReason()).append('\n');
-		}
-		for (String line : specs.getLines())
-		{
-			text.append(line).append('\n');
-		}
+	private static final List<String> COPIED_SECTIONS = List.of("Specs and drains", "Supplies", "Death recap");
 ```
 
-(`text` is Part 2's `StringBuilder`; if Part 2 collects lines in a `List<String>` instead, add the same strings to that list.)
-
-`src/main/java/com/yamareviewer/domain/history/HistoryProjector.java`: in `summarize`, add these three calls to the `KillSummary.builder()` chain before `.build()`:
+`src/main/java/com/yamareviewer/domain/history/HistoryProjector.java`: in `summarize`, replace Part 2's three placeholder calls `.p3Accuracy(null)`, `.defenceDrained(null)` and `.specLandedShare(null)` of the `KillSummary.builder()` chain with:
 
 ```java
 			.p3Accuracy(review.getPrayerReview().asOptional().flatMap(PrayerReview::accuracy).orElse(null))
@@ -6516,10 +6573,86 @@ and the `"Specs: n/a"` part of line 4 with `"Specs: " + P3Text.specFragment(revi
 
 with the imports `com.yamareviewer.domain.review.PrayerReview` and `com.yamareviewer.domain.review.SpecSummary`. `HistoryProjector.index` already averages and trends `p3Accuracy` and `defenceDrained` from the summaries (Part 2 wrote it against null-safe fields), so nothing else changes.
 
+Two Part 2 tests list the Part 2 sections only and change with it. In `src/test/java/com/yamareviewer/domain/text/ReviewFormatterTest.java`, replace the test `headlineStatusAndSectionOrder` with:
+
+```java
+	@Test
+	public void headlineStatusAndSectionOrder()
+	{
+		ReviewView view = ReviewFormatter.format(Reviews.builder("k", 1L, Mode.DUO_HOST, Contract.BLOODIED_BLOWS).build());
+
+		assertEquals("Yama (duo host, Bloodied Blows) 4:12", view.getHeadline());
+		assertEquals("Complete", view.getStatus());
+		assertEquals(List.of("Phases", "Damage taken", "Opener", "P3 prayers", "Crash lines", "Waves", "Flares", "Specs and drains",
+				"Supplies", "P3 tick log"),
+			view.getSections().stream().map(ViewSection::getTitle).collect(toList()));
+	}
+```
+
+Replace `src/test/java/com/yamareviewer/domain/text/ClipboardExportTest.java` with (the specs block, hidden in Part 2's sample review, now sits between the chat lines and the supplies):
+
+```java
+package com.yamareviewer.domain.text;
+
+import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.review.DeathRecap;
+import com.yamareviewer.domain.review.KillReview;
+import com.yamareviewer.domain.review.RecapTick;
+import com.yamareviewer.domain.review.Section;
+import com.yamareviewer.testing.Reviews;
+import java.util.List;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import org.junit.Test;
+
+public class ClipboardExportTest
+{
+	@Test
+	public void chatLinesThenSpecsThenSuppliesThenTheRecap()
+	{
+		KillReview review = Reviews.sample().toBuilder()
+			.endReason(EndReason.PLAYER_DIED)
+			.deathRecap(Section.ok(new DeathRecap(List.of(new RecapTick(420, List.of(), 0, 5, null, "you", List.of())), false)))
+			.build();
+
+		String text = ClipboardExport.text(review);
+
+		assertEquals(String.join("\n",
+			"Yama (solo) died in P3 at 4:12. P1 1:05, P2 1:10, P3 1:24.",
+			"P3 prayers n/a. Crash lines n/a. Waves n/a.",
+			"Flares 5/6 killed. Damage taken 212.",
+			"Specs: n/a. Supplies 318k.",
+			"",
+			"Specs and drains",
+			"n/a (Not applicable to this kill)",
+			"",
+			"Supplies",
+			"Shark x2: 1,600",
+			"Super restore 6 doses: 316,850",
+			"Total: 318,450 (Grand Exchange)",
+			"",
+			"Death recap",
+			"Tick 420: HP 0, prayer 5, Yama targets you"), text);
+	}
+
+	@Test
+	public void noRecapBlockWithoutADeathAndNoNames()
+	{
+		String text = ClipboardExport.text(Reviews.sample());
+
+		assertFalse(text.contains("Death recap"));
+		assertTrue(text.endsWith("Total: 318,450 (Grand Exchange)"));
+		assertFalse(text.contains("Me"));
+		assertFalse(text.contains("Buddy"));
+	}
+}
+```
+
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `./gradlew test --tests 'com.yamareviewer.domain.text.*' --tests 'com.yamareviewer.domain.history.*'`
-Expected: PASS, including Part 2's text and history tests. If a Part 2 `ChatLinesTest` asserted the literal `n/a` placeholders of lines 2 or 4 for a review without Part 3 sections, it still passes: the sections are hidden there and print `n/a`.
+Expected: PASS, including Part 2's text and history tests. Part 2's `ChatLinesTest` asserts the literal `n/a` placeholders of lines 2 and 4 for reviews without Part 3 sections; it still passes, because the sections are hidden there and print `n/a`.
 
 - [ ] **Step 6: Commit**
 
@@ -6536,14 +6669,14 @@ This task cannot be completed by an agent alone. It needs the five raw logs of t
 
 **Files:**
 - Create: `src/test/java/com/yamareviewer/tools/RawLogs.java`, `src/test/java/com/yamareviewer/tools/FixtureScrubber.java`
-- Replace: `src/test/java/com/yamareviewer/tools/Replay.java` (Part 2's version printed the formatter output; this one also writes the review JSON)
+- Replace: `src/test/java/com/yamareviewer/tools/Replay.java` (Part 2's version printed the formatter output or JSON; this one also writes the review JSON to a file and keeps Part 2's `read`, `review(KillLog, IdRegistry)` and `text`, which Part 2's `ReplayTest` calls)
 - Modify: `build.gradle` (add the `scrubFixture` task; `replay` exists from Part 2)
 - Create: `src/test/resources/fixtures/.gitkeep`
 - Test: `src/test/java/com/yamareviewer/tools/FixtureScrubberTest.java`, `src/test/java/com/yamareviewer/GoldenReviewTest.java`
 
 **Interfaces:**
 - Consumes: `GsonLogRepository`, `EventCodec`, `InMemoryFileStore` (Part 1), `BuiltInIds.registry()` (Part 1), `ReviewBuilder`, `Projections.standard()`, `KillReviewAssembler`, `ReviewSettings.DEFAULT`, `ReviewFormatter` (Part 2), every projection of this part.
-- Produces: `RawLogs.read(Path)`, `RawLogs.write(KillLog, Path)`; `FixtureScrubber.scrub(KillLog)` (names replaced, OTHER-actor events dropped); `Replay.review(KillLog)`, `Replay.json(KillReview)`, `Replay.GSON`; `./gradlew replay --args="<log.jsonl.gz> [<expected.review.json>]"`, `./gradlew scrubFixture --args="<raw log> <fixture.jsonl.gz>"`; `GoldenReviewTest`.
+- Produces: `RawLogs.read(Path)`, `RawLogs.write(KillLog, Path)`; `FixtureScrubber.scrub(KillLog)` (names replaced, OTHER-actor events dropped); `Replay.review(KillLog)` (built-in IDs), `Replay.json(KillReview)`, `Replay.GSON`, and Part 2's `Replay.read(Path)`, `Replay.review(KillLog, IdRegistry)`, `Replay.text(ReviewView)` kept; `./gradlew replay --args="<log.jsonl.gz> [<expected.review.json>]"`, `./gradlew scrubFixture --args="<raw log> <fixture.jsonl.gz>"`; `GoldenReviewTest`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -6660,8 +6793,9 @@ public class GoldenReviewTest
 
 			KillLog log = RawLogs.read(logPath);
 			KillReview review = Replay.review(log);
-			JsonElement expected = JsonParser.parseString(new String(Files.readAllBytes(expectedPath), StandardCharsets.UTF_8));
-			JsonElement actual = JsonParser.parseString(Replay.json(review));
+			// RuneLite ships Gson 2.8.5, which has no static JsonParser.parseString
+			JsonElement expected = new JsonParser().parse(new String(Files.readAllBytes(expectedPath), StandardCharsets.UTF_8));
+			JsonElement actual = new JsonParser().parse(Replay.json(review));
 
 			assertEquals(name, Replay.GSON.toJson(expected), Replay.GSON.toJson(actual));
 			assertEquals(name + " must be a complete review", ReviewStatus.COMPLETE, review.getStatus());
@@ -6880,7 +7014,11 @@ package com.yamareviewer.tools;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.yamareviewer.adapter.ids.BuiltInIds;
+import com.yamareviewer.adapter.persistence.EventCodec;
+import com.yamareviewer.domain.event.DomainEvent;
+import com.yamareviewer.domain.ids.IdRegistry;
 import com.yamareviewer.domain.ids.Rules;
+import com.yamareviewer.domain.model.KillHeader;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.projection.KillReviewAssembler;
 import com.yamareviewer.domain.projection.ProjectionContext;
@@ -6892,13 +7030,19 @@ import com.yamareviewer.domain.text.ReviewFormatter;
 import com.yamareviewer.domain.text.ReviewView;
 import com.yamareviewer.domain.text.ViewSection;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.zip.GZIPInputStream;
 
 /**
  * Development tool: prints the review of a raw log with the built-in IDs and default rules, and with a
- * second argument writes the review JSON that the golden test compares against.
+ * second argument writes the review JSON that the golden test compares against. Keeps Part 2's
+ * read(Path), review(KillLog, IdRegistry) and text(ReviewView), which Part 2's ReplayTest uses.
  */
 public final class Replay
 {
@@ -6915,8 +7059,8 @@ public final class Replay
 			System.err.println("Usage: ./gradlew replay --args=\"<raw log .jsonl.gz> [<expected .review.json>]\"");
 			System.exit(1);
 		}
-		KillReview review = review(RawLogs.read(Path.of(args[0])));
-		print(ReviewFormatter.format(review));
+		KillReview review = review(read(Path.of(args[0])));
+		System.out.print(text(ReviewFormatter.format(review)));
 		if (args.length == 2)
 		{
 			Files.write(Path.of(args[1]), json(review).getBytes(StandardCharsets.UTF_8));
@@ -6924,10 +7068,47 @@ public final class Replay
 		}
 	}
 
-	/** Exactly what the plugin computes for this log, without health checks (Part 4 adds those). */
+	/** Part 2's reader, unchanged: the header line, then one event per line; unknown events are counted as skipped. */
+	public static KillLog read(Path file) throws IOException
+	{
+		String text;
+		try (InputStream in = new GZIPInputStream(Files.newInputStream(file)))
+		{
+			text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+		}
+		EventCodec codec = new EventCodec(new Gson());
+		String[] lines = text.split("\n");
+		KillHeader header = codec.decodeHeader(lines[0]);
+		List<DomainEvent> events = new ArrayList<>();
+		int skipped = 0;
+		for (int i = 1; i < lines.length; i++)
+		{
+			if (lines[i].isBlank())
+			{
+				continue;
+			}
+			Optional<DomainEvent> event = codec.decode(lines[i]);
+			if (event.isPresent())
+			{
+				events.add(event.get());
+			}
+			else
+			{
+				skipped++;
+			}
+		}
+		return KillLog.of(header, events, skipped);
+	}
+
+	/** Exactly what the plugin computes for this log with the built-in IDs, without health checks (Part 4 adds those). */
 	public static KillReview review(KillLog log)
 	{
-		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), BuiltInIds.registry(), Rules.DEFAULT);
+		return review(log, BuiltInIds.registry());
+	}
+
+	public static KillReview review(KillLog log, IdRegistry ids)
+	{
+		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), ids, Rules.DEFAULT);
 		ProjectionContext context = builder.run(log, ReviewSettings.DEFAULT);
 		return KillReviewAssembler.assemble(log, context);
 	}
@@ -6937,23 +7118,22 @@ public final class Replay
 		return GSON.toJson(review);
 	}
 
-	private static void print(ReviewView view)
+	public static String text(ReviewView view)
 	{
-		System.out.println(view.getHeadline());
-		System.out.println(view.getStatus());
+		StringBuilder out = new StringBuilder(view.getHeadline()).append('\n').append(view.getStatus()).append('\n');
 		for (ViewSection section : view.getSections())
 		{
-			System.out.println();
-			System.out.println("== " + section.getTitle());
+			out.append('\n').append(section.getTitle()).append('\n');
 			if (section.getHiddenReason() != null)
 			{
-				System.out.println(section.getHiddenReason());
+				out.append("  hidden: ").append(section.getHiddenReason()).append('\n');
 			}
 			for (String line : section.getLines())
 			{
-				System.out.println(line);
+				out.append("  ").append(line).append('\n');
 			}
 		}
+		return out.toString();
 	}
 }
 ```
