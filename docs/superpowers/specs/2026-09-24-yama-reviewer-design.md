@@ -251,7 +251,7 @@ Mode is derived by `ModeProjection`, never stored in the header. First match win
 
 ### 5.5 IDs and tunables
 
-- **Built-in IDs:** `adapter.ids.BuiltInIds` builds the `IdRegistry` from RuneLite's `gameval` constants (`NpcID`, `AnimationID`, `SpotanimID`, `ObjectID1`, `ItemID`, `VarbitID`, `InterfaceID`). When RuneLite regenerates those constants after a game update, many renumberings fix themselves. Values with no constant (region 6045, overhead texts) are literals in the same class, and no other class contains a game ID.
+- **Built-in IDs:** `adapter.ids.BuiltInIds` builds the `IdRegistry` from RuneLite's `gameval` constants (`NpcID`, `AnimationID`, `SpotanimID`, `ObjectID`, `ItemID`, `VarbitID`, `InterfaceID`). When RuneLite regenerates those constants after a game update, many renumberings fix themselves. Values with no constant (region 6045, overhead texts) are literals in the same class, and no other class contains a game ID.
 - **Uncaptured roles:** a role with no IDs makes every section that needs it `HIDDEN` with reason `IDS_NOT_CAPTURED`.
 - **Confirmation:** mappings marked "unconfirmed" below ship as they are and are confirmed or corrected by golden tests built from the logging kills (section 13), before release.
 - **Tunables** (`domain.ids.Rules`, with defaults, no game IDs): `prayerCheck` (`CAST` or `HITSPLAT`, default `CAST`), `prayerCheckOffset` 0, `blockedMaxHit` 3, `p1p2AttackCycle` 8 (7 under a contract), `p3AttackCycle` 7, `crashImpactWindow` 1, `crashSetGap` 6, `waveDisableWindow` 5, `specResultWindow` 6, `statRestoreTicks` 100, `minAttackCountRatio` 0.6, `minCycleGapRatio` 0.8, `minAlternationRatio` 0.9.
@@ -273,7 +273,7 @@ Mode is derived by `ModeProjection`, never stored in the header. First match win
 | `GLYPH_CONJURE_MESSAGE` | message | "Yama conjures" (purple text for shadow, orange for fire) | one plugin | Glyphs |
 | `CONTRACT_NAME_WIDGET` | widget | `InterfaceID.YamaContractFight.CONTRACT_NAME` | unconfirmed text | Contract |
 | `CONTRACT_ITEM_*` | item | one role per contract, `ItemID.YAMA_*_CONTRACT` (table in 6.3.1) | confirmed | Contract |
-| `GLYPH_FIRE` / `GLYPH_SHADOW` | object | `ObjectID1.FLOORKIT_SUMMONING03_FULL02` / `_FULL01` | unconfirmed colours | Glyphs |
+| `GLYPH_FIRE` / `GLYPH_SHADOW` | object | `ObjectID.FLOORKIT_SUMMONING03_FULL02` / `_FULL01` (declared in the package-private `ObjectID1`) | unconfirmed colours | Glyphs |
 | `YAMA_STANDARD_ATTACK` | animation | `AnimationID.NPC_YAMA01_MAGIC01` | unconfirmed | Attacks |
 | `YAMA_MELEE` | animation | `AnimationID.NPC_YAMA01_MELEE01` | unconfirmed | Attacks, DamageAttribution |
 | `YAMA_FLARE_SUMMON` | animation | `AnimationID.NPC_YAMA_SUMMON01` | unconfirmed | Flares |

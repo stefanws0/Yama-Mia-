@@ -1744,7 +1744,7 @@ import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.NpcID;
-import net.runelite.api.gameval.ObjectID1;
+import net.runelite.api.gameval.ObjectID;
 import net.runelite.api.gameval.SpotanimID;
 import net.runelite.api.gameval.VarbitID;
 
@@ -1800,8 +1800,9 @@ public final class BuiltInIds
 		ids.put(Role.WEAPON_PURGING_STAFF, Set.of(ItemID.PURGING_STAFF));
 		ids.put(Role.WEAPON_SARADOMIN_GODSWORD, Set.of(ItemID.SGS, ItemID.SGSG));
 
-		ids.put(Role.GLYPH_FIRE, Set.of(ObjectID1.FLOORKIT_SUMMONING03_FULL02));
-		ids.put(Role.GLYPH_SHADOW, Set.of(ObjectID1.FLOORKIT_SUMMONING03_FULL01));
+		// ObjectID extends the package-private ObjectID1, which declares these constants.
+		ids.put(Role.GLYPH_FIRE, Set.of(ObjectID.FLOORKIT_SUMMONING03_FULL02));
+		ids.put(Role.GLYPH_SHADOW, Set.of(ObjectID.FLOORKIT_SUMMONING03_FULL01));
 
 		ids.put(Role.YAMA_STANDARD_ATTACK, Set.of(AnimationID.NPC_YAMA01_MAGIC01));
 		ids.put(Role.YAMA_MELEE, Set.of(AnimationID.NPC_YAMA01_MELEE01));
@@ -5542,10 +5543,9 @@ import java.util.Optional;
 import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.gameval.NpcID;
 import net.runelite.api.gameval.ObjectID;
-import net.runelite.api.gameval.ObjectID1;
 import net.runelite.api.gameval.SpotanimID;
 
-/** Development tool only (test source set, never shipped): gameval constant names by kind and id. */
+/** Development tool only (test source set, never shipped, so reflection is allowed): gameval constant names by kind and id. */
 final class GamevalNames
 {
 	private final Map<String, Map<Integer, String>> byKind = new HashMap<>();
@@ -5554,8 +5554,7 @@ final class GamevalNames
 	{
 		Map<Integer, String> animations = namesOf(AnimationID.class);
 		Map<Integer, String> spotanims = namesOf(SpotanimID.class);
-		Map<Integer, String> objects = new HashMap<>(namesOf(ObjectID.class));
-		objects.putAll(namesOf(ObjectID1.class));
+		Map<Integer, String> objects = namesOf(ObjectID.class);
 		byKind.put("animation", animations);
 		byKind.put("object-animation", animations);
 		byKind.put("graphic", spotanims);
@@ -5579,6 +5578,8 @@ final class GamevalNames
 			{
 				try
 				{
+					// ObjectID inherits most constants from the package-private ObjectID1.
+					field.setAccessible(true);
 					names.putIfAbsent(field.getInt(null), field.getName());
 				}
 				catch (IllegalAccessException e)
@@ -5881,5 +5882,7 @@ git commit -m "feat: add the capture summary tool and the logging-kills guide"
 **Spec coverage (spec 13, part 1):** project setup (Task 1); domain events and stable type names of 5.1 (Task 2); roles, tunables and `gameval` built-in IDs of 5.5 (Task 3); fight lifecycle of 5.3 with the end completed on the next tick (Tasks 4, 9); raw log storage and schema policy of 5.2 (Task 5); the plugin executor and client-shutdown wait of 4.5 (Tasks 6, 9, 10); the anti-corruption layer (Tasks 7, 9); priced snapshots on the client thread (Task 8); the ArchUnit rules of 4.4 (Task 11); capture mode and the tools of 12 (Tasks 7, 12). The replay silence test through `GameEventListener` needs a `ReviewPublisher`, so it is in Part 2. Mode detection (5.4) and sections 6–9 are Parts 2–4.
 
 **Placeholders:** none; the four roles with no built-in value are named in `BuiltInIds` and asserted in `BuiltInIdsTest`.
+
+**Compile check (2026-09-24):** every code block of this plan was extracted and compiled with `javac --release 11` against `runelite-api` built from source (RuneLite master `be65271`, including `gameval`), the real `Text`, `Filepath`, `Plugin`, `PluginDescriptor`, `Subscribe`, `ClientShutdown` and config annotations from `runelite-client`, and signature-true stubs for `ItemManager`, `NpcUtil`, `EventBus`, `ClientThread` and `ConfigManager`. All 88 tests of the plan passed (JUnit 4.12, Mockito 5.14.2, ArchUnit 1.3.0, Gson 2.8.5). Behaviour inside the real client still needs the in-game check of Task 10.
 
 **Type consistency:** `KillEndedListener.killEnded(KillLog)`, `SnapshotSource.take(int, SnapshotKind)`, `LogRepository` (`save`, `loadAll`, `prune`), `FightStart(selfName, selfPosition, playersPresent)`, `PositionReader.position/regionId`, `EventTranslator.aggregate(Item[])` and `KillEndedHandler.pending()` are used identically in Tasks 4–12.
