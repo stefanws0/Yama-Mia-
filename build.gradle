@@ -30,7 +30,7 @@ dependencies {
 }
 
 group = 'com.yamareviewer'
-version = '0.1.0'
+version = '0.2.0'
 
 tasks.withType(JavaCompile).configureEach {
 	options.encoding = 'UTF-8'
@@ -74,4 +74,9 @@ tasks.register('shadowJar', Jar) {
 tasks.register('captureSummary', JavaExec) {
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = 'com.yamareviewer.tools.CaptureSummary'
+}
+
+tasks.register('replay', JavaExec) {
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.yamareviewer.tools.Replay'
 }
