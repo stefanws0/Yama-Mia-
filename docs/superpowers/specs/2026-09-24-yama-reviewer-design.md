@@ -305,9 +305,9 @@ Message roles match by prefix after colour tags are removed; overhead roles matc
 
 `ReviewBuilder.build(KillLog, IdRegistry, Rules) → KillReview` runs this ordered list of projections. Each reads the events and the `ProjectionContext` holding earlier results:
 
-`Phases → Contract → Mode → Glyphs → Attacks → Opener → Crashes → Waves → Flares → Specs → DamageAttribution → Supplies → DeathRecap → TickLog`
+`Phases → Contract → Mode → Glyphs → Attacks → Crashes → Waves → Flares → Specs → PrayerReview → Opener → TickLog → DamageAttribution → Supplies → DeathRecap`
 
-`Glyphs` is intermediate: it feeds `Opener` and is not shown on its own.
+`Glyphs` and `Attacks` are intermediate: they feed later projections and are not shown on their own. Each projection only reads sections earlier in the list.
 
 - Each projection produces a `Section<T>`: `OK(value)` or `HIDDEN(reason)`. Reasons: `IDS_NOT_CAPTURED`, `NOT_APPLICABLE` (for example partner damage in solo), `CONTRACT` (not meaningful under this contract), `HEALTH_CHECK_FAILED`, `ERROR`.
 - **Review status:** `INCOMPLETE` when any section is hidden for `HEALTH_CHECK_FAILED` or `ERROR`, or the log had skipped events; otherwise `COMPLETE`. The other reasons do not make a review incomplete.
