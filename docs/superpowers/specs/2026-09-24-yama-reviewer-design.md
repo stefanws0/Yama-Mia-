@@ -79,8 +79,8 @@ flowchart LR
 |---|---|
 | Event-driven, event-sourcing-lite | RuneLite events are translated into our own domain events and appended to an immutable per-kill event stream (`KillLog`). Every review is a projection of that stream, so any review can be rebuilt by replaying it. |
 | CQRS | Write side: commands `StartKill`, `RecordEvent`, `EndKill` handled by `KillSession`, persisted by `LogRepository`. Read side: projections into `KillReview`, `HistoryView`, `MetronomeStats`, persisted by `ReviewRepository` and read only through query objects. The UI never touches the write side. Implemented with plain handler classes and Guice; no bus library and no database. |
-| Separation of concerns, hexagonal (ports and adapters) | `domain` has no dependencies. `application` holds use cases and port interfaces. `adapter` holds everything RuneLite-, Swing- or filesystem-specific. |
-| Dependency rule | `adapter → application → domain`, never the other way. Enforced by ArchUnit. |
+| Separation of concerns, hexagonal (ports and adapters) | `domain` has no dependencies. `application` holds use cases and port interfaces. `adapter` holds everything RuneLite-, Swing- or filesystem-specific. The plugin class in the root package is the composition root: it only wires objects together and forwards RuneLite events. |
+| Dependency rule | `adapter → application → domain`, never the other way; only the root-package composition root sees every layer. Enforced by ArchUnit. |
 | Open/closed | Each metric is a `Projection`, each check a `HealthCheck`, each weapon a `DrainRule`, each outcome step an `OutcomeRule`. Adding one is adding a class to an ordered list. |
 | Anti-corruption layer | `EventTranslator` is the only class that reads RuneLite event types. Nothing past it knows RuneLite exists. |
 | Ubiquitous language | Code uses the game's terms: `Phase`, `Attack`, `PrayerOutcome`, `Crash`, `Flare`, `Spec`, `Drain`, `Mode`. |
@@ -111,11 +111,12 @@ application/
   port/         LogRepository, ReviewRepository, OverrideRepository, ReportRepository,
                 PriceSource, ReviewPublisher, Clock
   event/        ReviewPublished (application event)
+YamaReviewerPlugin, YamaReviewerConfig   (root package: the composition root that wires everything)
 adapter/
-  runelite/     YamaReviewerPlugin, YamaReviewerConfig, EventTranslator, SnapshotReader,
-                ModeSignals, ItemManagerPriceSource, HighAlchPriceSource
-  persistence/  GsonLogRepository, GsonReviewRepository, GsonOverrideRepository,
-                FileReportRepository, DomainEventTypeAdapter
+  recording/    EventTranslator, ActorResolver, TickSampler, SnapshotReader
+  pricing/      ItemManagerPriceSource, HighAlchPriceSource
+  persistence/  FileStore, FilepathFileStore, EventCodec, IdsJsonLoader, GsonLogRepository,
+                GsonReviewRepository, GsonOverrideRepository, FileReportRepository
   ui/           ReviewPanel, tab components, ReviewView/HistoryView renderers
   publish/      ChatReviewPublisher, PanelReviewPublisher
 resources/
@@ -148,7 +149,7 @@ flowchart LR
 
 ### 4.4 How the silence rule is enforced
 
-- ArchUnit test: no class in `adapter.runelite`, `application.command` or `domain.event` depends on `adapter.publish`, `adapter.ui` or `ReviewPublished`.
+- ArchUnit test: no class in `adapter.recording`, `application.command` or `domain.event` depends on `adapter.publish`, `adapter.ui` or `ReviewPublished`.
 - ArchUnit test: no class in the codebase extends `Overlay`, `InfoBox` or references `Notifier`, `Clip`, or `SoundEffect` APIs.
 - `KillEndedHandler` is the only class that posts `ReviewPublished`, and it is only invoked from `KillSession.end()`. A unit test replays a full synthetic kill event by event and asserts `ReviewPublisher` is untouched until `FightEnded`.
 - `ReviewPanel` never subscribes to game events; it only redraws from `ReviewPublished` and user clicks.
@@ -162,24 +163,26 @@ flowchart LR
 
 ### 5.1 Domain events
 
-Every event carries `tick` (int, game tick counter since fight start) and, where relevant, an `Actor`: `SELF`, `PARTNER`, `YAMA`, `JUDGE`, `FLARE(npcIndex)`, `GLYPH(npcIndex)`, `OTHER(name or npcId)`.
+Every event carries `tick` (int, game tick counter since fight start) and, where relevant, an `Actor`: `SELF`, `PARTNER`, `YAMA`, `JUDGE`, `FLARE(npcIndex)`, `NPC(npcId)` for any other NPC that has a role in `ids.json`, or `OTHER(name)`. Events for `OTHER` actors are dropped unless capture mode is on.
 
 Events record observations with raw IDs. None of them contains a classification.
 
 | Event | Fields | Source RuneLite event |
 |---|---|---|
 | `EntryChosen` | `TRAVEL` or `JOIN` | `MenuOptionClicked` on Voice of Yama |
-| `FightStarted` | players in arena (names), own world position | `NpcSpawned` of Yama inside region |
+| `FightStarted` | own name, other players in arena (names), own world position | `NpcSpawned` of Yama inside region |
 | `FightEnded` | `YAMA_DIED`, `PLAYER_DIED`, `LEFT` | `ActorDeath`, region change, logout, plugin shutdown |
 | `NpcSpawned` / `NpcDespawned` | actor, npcId, npcIndex | same |
+| `ObjectSpawned` | objectId, world position | `GameObjectSpawned` (glyphs are game objects, not NPCs) |
 | `OverheadTextObserved` | actor, text | `OverheadTextChanged` |
 | `ScriptObserved` | scriptId | `ScriptPreFired` |
 | `AnimationObserved` | actor, animationId | `AnimationChanged` |
-| `GraphicObserved` | actor, graphicId | `GraphicChanged` / `GraphicsObjectCreated` |
+| `GraphicObserved` | actor, graphicId | `GraphicChanged` (each new spot anim on the actor) |
+| `GroundGraphicObserved` | graphicId, world position | `GraphicsObjectCreated` |
 | `ProjectileObserved` | projectileId, target actor, end tick | `ProjectileMoved` (first sighting only) |
-| `HitsplatObserved` | target actor, hitsplat type, amount, `mine` | `HitsplatApplied` (`Hitsplat.isMine()`) |
+| `HitsplatObserved` | target actor, kind (`DAMAGE`, `BLOCK`, `HEAL`, `OTHER`), raw hitsplat type, amount, `mine` | `HitsplatApplied` (`Hitsplat.isMine()`) |
 | `TickState` | active prayers, HP, prayer points, spec energy, equipped weapon id, Yama's interacting target, own and partner world positions | `GameTick` |
-| `InventoryDelta` | itemId, quantity change | `ItemContainerChanged` (inventory) |
+| `InventoryDelta` | itemId, item name, quantity change | `ItemContainerChanged` (inventory) |
 | `SuppliesSnapshot` | `START` or `END`, inventory items, rune pouch runes | `SnapshotReader` at fight start and end |
 
 `TickState` is emitted once per `GameTick`, after all other events of that tick, so projections can treat it as "state at end of tick".
@@ -187,10 +190,11 @@ Events record observations with raw IDs. None of them contains a classification.
 ### 5.2 KillLog and storage
 
 - `KillLog` = `KillHeader` + ordered `List<DomainEvent>`.
-- `KillHeader`: `killId` (UUID), start and end wall-clock time, plugin version, event schema version (starts at 1), `ids.json` version used at record time, entry choice, platform side at first Judge, partner display name (duo only), capture flag.
-- Stored by `GsonLogRepository` as gzipped JSON Lines: line 1 the header, then one event per line, at `<RuneLite dir>/yama-reviewer/raw/<killId>.jsonl.gz`. A `DomainEventTypeAdapter` writes a `"type"` discriminator per event.
+- `KillHeader`: `killId` (UUID), start and end wall-clock time, plugin version, event schema version (starts at 1), `ids.json` version used at record time, entry choice, partner display name (duo only), capture flag. The platform side at the first Judge is derived by `ModeProjection` from `TickState` positions, not stored.
+- Stored by `GsonLogRepository` as gzipped JSON Lines: line 1 the header, then one event per line, at `raw/<startEpochMs>-<killId>.jsonl.gz` under the plugin directory (the time prefix makes name order chronological). A `DomainEventTypeAdapter` writes a `"type"` discriminator per event.
+- **Plugin directory:** all files live under `Plugin.getPluginDirectory()` (RuneLite's `Filepath` API, `.runelite/plugin-data/yama-reviewer/`), with `@PluginDescriptor(internalName = "yama-reviewer")`. All file I/O goes through `Filepath`; paths in this spec are relative to it.
 - Retention: newest N logs (config `rawLogsKept`, default 20). Older logs are deleted after a new one is written.
-- Capture mode (config, off by default) writes an additional uncompressed copy to `yama-reviewer/capture/<killId>.jsonl` and records events for `OTHER` actors that normal mode drops.
+- Capture mode (config, off by default) writes an additional uncompressed copy to `capture/<killId>.jsonl` and records events for `OTHER` actors that normal mode drops.
 
 ### 5.3 Fight lifecycle
 
@@ -206,7 +210,7 @@ Stored in the header and resolved by `ModeProjection`, first match wins:
 | Mode | Rule |
 |---|---|
 | Config override set | That mode |
-| Duo joiner | `EntryChosen = JOIN`, or no entry choice and platform side at first Judge is east |
+| Duo joiner | `EntryChosen = JOIN`, or no entry choice and your x position at the first Judge is greater than the partner's (east) |
 | Duo host | `EntryChosen = TRAVEL` and 2 players in arena at `FightStarted`, or no entry choice and west side with a partner present |
 | Solo | `EntryChosen = TRAVEL` and 1 player in arena, or no entry choice and no partner ever observed |
 
@@ -234,6 +238,28 @@ All IDs live in `ids.json`, keyed by `Role`. No class outside `domain.ids` conta
 - Where RuneLite's `gameval` constants cover an ID, `ids.json` holds that constant's value and a unit test asserts they are equal, so a RuneLite update that renumbers the constant fails the build.
 - `IdRegistry` = built-in `ids.json` with active overrides from `OverrideRepository` layered on top (section 9).
 - The full role list is the union of what each projection declares; it covers every item in "To capture" of the original spec.
+- Gson comes from RuneLite (`@Inject Gson`, extended with `newBuilder()`), never constructed from scratch; the domain never sees Gson.
+
+**gameval hints.** RuneLite's generated constants already name likely IDs. They are *not* trusted until a logging kill confirms them, so `ids.json` ships these roles empty and the capture review (Part 1 of the plan) compares captures against this list:
+
+| Role | Candidate constant |
+|---|---|
+| `YAMA` npc | `NpcID.YAMA` (14176) |
+| `VOID_FLARE` npc | `NpcID.YAMA_VOIDFLARE` (14179) |
+| `JUDGE` npc | `NpcID.YAMA_JUDGE_OF_YAMA` (14180) |
+| `VOICE_OF_YAMA` npc | `NpcID.VOICE_OF_YAMA_3OP` (14185) |
+| `METEOR_STRIKE` npc | `NpcID.YAMA_METEOR_NPC` (14182) |
+| `YAMA_STANDARD_ATTACK` animation | `AnimationID.NPC_YAMA01_MAGIC01` / `NPC_YAMA01_MAGIC02` |
+| `YAMA_MELEE` animation | `AnimationID.NPC_YAMA01_MELEE01` |
+| `SHADOW_STOMP` animation | `AnimationID.NPC_YAMA01_STOMP01` |
+| `P3_MAGIC_ON_PLAYER` graphic | `SpotanimID.VFX_PLAYER_YAMA_MAGIC_FIRE_IMPACT01` |
+| `P3_RANGED_ON_PLAYER` graphic | `SpotanimID.VFX_PLAYER_YAMA_MAGIC_SHADOW_IMPACT01` |
+| `SHADOW_CRASH` graphic | `SpotanimID.VFX_YAMA_FLAMING_ROCK_*` / `VFX_PLAYER_YAMA_FALLING_ROCK_*` |
+| `FLARE_EXPLOSION` graphic | `SpotanimID.VFX_VOIDFLARE_EXPLODE_YAMA_IMPACT_RED` / `_BLUE` |
+| `METEOR_STRIKE` graphic | `SpotanimID.VFX_YAMA_METEOR_*` |
+| `GLYPH_FIRE` / `GLYPH_SHADOW` objects | objects animated by `AnimationID.YAMA_LOC_GLYPH_ACTIVATE_FIRE` / `_SHADOW` |
+
+The NPC IDs are confirmed by Yama Utilities and ship filled in.
 
 ## 6. Read side: projections and classification
 
@@ -275,13 +301,13 @@ Each produces a `Section<T>`: either `OK(value)` or `HIDDEN(reason)` where reaso
 
 **Switch timing:** ticks between the previous attack's `L` and the first tick the correct prayer is active for this attack. Not computed for the first attack or when the outcome is `NO_PRAYER`.
 
-**Opener:** the `Glyphs` projection counts shadow and fire glyph spawns in P2 (`NpcSpawned` or `GraphicObserved` for roles `GLYPH_SHADOW` and `GLYPH_FIRE`). Majority shadow → expected opener ranged; majority fire → magic; tie → no expectation. The opener result is the first P3 attack's style, the expectation, and its outcome.
+**Opener:** the `Glyphs` projection counts shadow and fire glyph spawns in P2 (`ObjectSpawned` for object roles `GLYPH_SHADOW` and `GLYPH_FIRE`). Majority shadow → expected opener ranged; majority fire → magic; tie → no expectation. The opener result is the first P3 attack's style, the expectation, and its outcome.
 
 **Tick log:** for every P3 attack (any target), its tick and the gap from the previous attack. Every gap that isn't 7 is annotated with the events between the two attacks that belong to crash, flare-spawn and melee roles.
 
 ### 6.4 Shadow Crash
 
-- `GraphicObserved(SHADOW_CRASH)` events are grouped into sets: a new set starts when more than 6 ticks have passed since the previous crash graphic.
+- Crash graphics (`GraphicObserved` or `GroundGraphicObserved` with role `SHADOW_CRASH`) are grouped into sets: a new set starts when more than 6 ticks have passed since the previous crash graphic.
 - Each crash belongs to the player it appeared on or nearest to (from `TickState` positions).
 - A crash is `HIT` if a hitsplat lands on its player within `crashImpactWindow` ticks of the impact tick, and that hitsplat isn't already assigned to a standard attack; the damage is that hitsplat's amount. Otherwise `DODGED`.
 - Result: per crash (set index, player, hit or dodged, damage) and totals for `SELF`.
@@ -382,7 +408,7 @@ Optional fifth block: the death recap (config, off by default).
 
 ### 7.6 Stored reviews
 
-`GsonReviewRepository` stores full `KillReview`s as JSON in `yama-reviewer/reviews/<mode>/<killId>.json`, keeping the newest `historySize` per mode. `HistoryView` is rebuilt from them on startup and after each publish. Reviews can be rebuilt from raw logs while those logs exist; older reviews keep the values they were built with.
+`GsonReviewRepository` stores full `KillReview`s as JSON in `reviews/<mode>/<killId>.json`, keeping the newest `historySize` per mode. `HistoryView` is rebuilt from them on startup and after each publish. Reviews can be rebuilt from raw logs while those logs exist; older reviews keep the values they were built with.
 
 ## 8. Health checks
 
@@ -421,10 +447,10 @@ flowchart TD
 - **Candidates:** IDs in the raw log that aren't in the registry, of the same kind (animation, graphic, projectile) and on the same actor as the role.
 - **Scoring:** `CandidateScorer` checks the pattern the role has to follow: for P3 attack graphics, appearance period close to 7 ticks, a consistent lead time before hitsplats on that player, and alternation with the paired role; for crash graphics, sets of 3; for spec animations, same tick as an unmatched spec-energy drop. Highest score wins; ties produce a report without an override.
 - **Validation:** `ReviewBuilder` and all health checks re-run on every stored raw log with the candidate applied. The candidate is accepted only if every log that contains it passes.
-- **`RepairLedger`** (stored as `yama-reviewer/overrides.json` by `GsonOverrideRepository`): per override, role, id, status `PROVISIONAL` or `TRUSTED`, clean kills since creation, created-at, plugin version. After 3 clean kills a provisional override becomes trusted. A failing check involving an overridden role reverts that override and writes a report.
+- **`RepairLedger`** (stored as `overrides.json` by `GsonOverrideRepository`): per override, role, id, status `PROVISIONAL` or `TRUSTED`, clean kills since creation, created-at, plugin version. After 3 clean kills a provisional override becomes trusted. A failing check involving an overridden role reverts that override and writes a report.
 - **Plugin updates:** when the built-in `ids.json` version is higher than the version an override was created against, and the built-in list for that role is non-empty, the override is dropped. Built-in values win.
 - **Labelling:** a review built with any override is `AUTO_REPAIRED`. The panel lists active overrides with Reset (clears all overrides and rebuilds the last kill's review).
-- **Reports:** `ReportWriter` produces text with plugin, RuneLite and game versions, failed checks, unknown IDs with counts and tick offsets, candidate scores, the resulting action, and an event excerpt of at most 200 lines around the first failure. Saved to `yama-reviewer/reports/<timestamp>.txt`. The panel offers Copy and "Report a problem", which opens a prefilled GitHub issue URL through `LinkBrowser` containing the summary only (under 6,000 characters) and asks the user to attach the file.
+- **Reports:** `ReportWriter` produces text with plugin, RuneLite and game versions, failed checks, unknown IDs with counts and tick offsets, candidate scores, the resulting action, and an event excerpt of at most 200 lines around the first failure. Saved to `reports/<timestamp>.txt`. The panel offers Copy and "Report a problem", which opens a prefilled GitHub issue URL through `LinkBrowser` containing the summary only (under 6,000 characters) and asks the user to attach the file.
 - **Guardrails:** no code is downloaded or changed at runtime; only local ID overrides. Nothing visible or audible happens during a fight.
 
 ## 10. Configuration
