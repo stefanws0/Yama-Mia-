@@ -70,3 +70,8 @@ tasks.register('shadowJar', Jar) {
 	archiveClassifier.set('shadow')
 	archiveFileName.set("${rootProject.name}-${project.version}-all.jar")
 }
+
+tasks.register('captureSummary', JavaExec) {
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.yamareviewer.tools.CaptureSummary'
+}
