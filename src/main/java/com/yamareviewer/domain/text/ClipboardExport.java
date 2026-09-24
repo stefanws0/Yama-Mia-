@@ -6,7 +6,7 @@ import java.util.List;
 /** Plain text of spec 7.4: the chat lines, supplies and cost, the death recap if any. Never a player name. Part 3 adds the spec efficiency. */
 public final class ClipboardExport
 {
-	private static final List<String> COPIED_SECTIONS = List.of("Supplies", "Death recap");
+	private static final List<String> COPIED_SECTIONS = List.of("Specs and drains", "Supplies", "Death recap");
 
 	private ClipboardExport()
 	{

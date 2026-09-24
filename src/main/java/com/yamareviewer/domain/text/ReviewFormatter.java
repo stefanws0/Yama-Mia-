@@ -44,8 +44,14 @@ public final class ReviewFormatter
 		}
 		sections.add(section("Phases", review.getPhases(), ReviewFormatter::phaseLines));
 		sections.add(section("Damage taken", review.getDamage(), damage -> damageLines(damage, review.getMode())));
+		sections.add(P3Text.opener(review));
+		sections.add(P3Text.prayerTimeline(review));
+		sections.add(P3Text.crashLines(review));
+		sections.add(P3Text.waves(review));
 		sections.add(section("Flares", review.getFlares(), ReviewFormatter::flareLines));
+		sections.add(P3Text.specs(review));
 		sections.add(section("Supplies", review.getSupplies(), ReviewFormatter::supplyLines));
+		sections.add(P3Text.tickLog(review));
 		return new ReviewView(headline(review), status(review), List.copyOf(sections));
 	}
 

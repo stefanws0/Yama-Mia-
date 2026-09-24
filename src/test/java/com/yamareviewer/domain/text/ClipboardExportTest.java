@@ -15,7 +15,7 @@ import org.junit.Test;
 public class ClipboardExportTest
 {
 	@Test
-	public void chatLinesThenSuppliesThenTheRecap()
+	public void chatLinesThenSpecsThenSuppliesThenTheRecap()
 	{
 		KillReview review = Reviews.sample().toBuilder()
 			.endReason(EndReason.PLAYER_DIED)
@@ -29,6 +29,9 @@ public class ClipboardExportTest
 			"P3 prayers n/a. Crash lines n/a. Waves n/a.",
 			"Flares 5/6 killed. Damage taken 212.",
 			"Specs: n/a. Supplies 318k.",
+			"",
+			"Specs and drains",
+			"n/a (Not applicable to this kill)",
 			"",
 			"Supplies",
 			"Shark x2: 1,600",

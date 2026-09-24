@@ -3,6 +3,8 @@ package com.yamareviewer.domain.history;
 import com.yamareviewer.domain.event.EndReason;
 import com.yamareviewer.domain.review.KillReview;
 import com.yamareviewer.domain.review.PhaseTimes;
+import com.yamareviewer.domain.review.PrayerReview;
+import com.yamareviewer.domain.review.SpecSummary;
 import com.yamareviewer.domain.review.SupplySummary;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -32,9 +34,9 @@ public final class HistoryProjector
 			.endReason(review.getEndReason())
 			.status(review.getStatus())
 			.cost(review.getSupplies().asOptional().map(SupplySummary::getTotalCost).orElse(null))
-			.p3Accuracy(null)
-			.defenceDrained(null)
-			.specLandedShare(null)
+			.p3Accuracy(review.getPrayerReview().asOptional().flatMap(PrayerReview::accuracy).orElse(null))
+			.defenceDrained(review.getSpecs().asOptional().map(SpecSummary::defenceDrained).orElse(null))
+			.specLandedShare(review.getSpecs().asOptional().flatMap(SpecSummary::landedShare).orElse(null))
 			.build();
 	}
 

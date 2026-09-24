@@ -32,7 +32,8 @@ public class ReviewFormatterTest
 
 		assertEquals("Yama (duo host, Bloodied Blows) 4:12", view.getHeadline());
 		assertEquals("Complete", view.getStatus());
-		assertEquals(List.of("Phases", "Damage taken", "Flares", "Supplies"),
+		assertEquals(List.of("Phases", "Damage taken", "Opener", "P3 prayers", "Crash lines", "Waves", "Flares", "Specs and drains",
+				"Supplies", "P3 tick log"),
 			view.getSections().stream().map(ViewSection::getTitle).collect(toList()));
 	}
 

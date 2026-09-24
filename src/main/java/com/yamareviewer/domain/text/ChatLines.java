@@ -32,7 +32,7 @@ public final class ChatLines
 		}
 		if (options.isPrayerLine())
 		{
-			lines.add(prayerLine(review));
+			lines.add(P3Text.prayerLine(review));
 		}
 		if (options.isFlareLine())
 		{
@@ -65,12 +65,6 @@ public final class ChatLines
 		return ReviewFormatter.headline(review) + "." + (reached.isEmpty() ? "" : " " + reached + ".");
 	}
 
-	/** Part 3 fills this with the P3 prayer, crash line and wave results. */
-	static String prayerLine(KillReview review)
-	{
-		return "P3 prayers " + NOT_AVAILABLE + ". Crash lines " + NOT_AVAILABLE + ". Waves " + NOT_AVAILABLE + ".";
-	}
-
 	/** "Flares 5/6 killed. Damage taken 212 (partner 188)." */
 	static String flareLine(KillReview review)
 	{
@@ -79,11 +73,11 @@ public final class ChatLines
 		return "Flares " + flares + ". Damage taken " + damage + ".";
 	}
 
-	/** Part 3 fills the specs; "Specs: n/a. Supplies 318k." */
+	/** "Specs: Def 225→145 in P1 (3/3 Emberlight). Supplies 318k." */
 	static String specLine(KillReview review)
 	{
 		String supplies = review.getSupplies().asOptional().map(summary -> Formats.compactGp(summary.getTotalCost())).orElse(NOT_AVAILABLE);
-		return "Specs: " + NOT_AVAILABLE + ". Supplies " + supplies + ".";
+		return "Specs: " + P3Text.specFragment(review) + ". Supplies " + supplies + ".";
 	}
 
 	private static String damageTaken(DamageSummary damage, Mode mode)
