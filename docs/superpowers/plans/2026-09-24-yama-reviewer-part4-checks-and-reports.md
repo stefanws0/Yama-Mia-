@@ -10,22 +10,22 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-24-yama-reviewer-design.md`, sections 2 (rules 6 and 7), 4.5, 5.3 (recording self-check), 6.1 (review status), 6.3.1 (per-contract review rules), 8, 9, 11, 12 and 13 (part 4).
 
-## Assumed fields of Parts 2 and 3 (reconcile before Task 2)
+## Part 3 types this plan uses, and the few remaining assumptions
 
-The names below are used by this plan but are not fixed by the interface brief. Before Task 2, open the real Part 2 and Part 3 classes; where a name differs, change the Part 4 code to the real name. Never change a Part 2 or Part 3 field to match this plan.
+Part 3's plan is complete, so these are its real names (`docs/superpowers/plans/2026-09-24-yama-reviewer-part3-p3-and-specs.md`, Tasks 2, 3, 8, 11, 13, 16): `Sections.ATTACKS` (`SectionKey<AttackTimeline>`), `Sections.CRASHES` (`SectionKey<CrashSummary>`), `Sections.SPECS` (`SectionKey<SpecSummary>`), `Sections.PRAYER_REVIEW`, `Sections.OPENER`, `Sections.TICK_LOG`; `Attack(castTick, phase, style, target, landingTick, damage)` (Lombok `@Value`; `style`, `target`, `landingTick`, `damage` nullable); `AttackTimeline(attacks)` with `inPhase(Phase)`; `CrashLine(tick, phase, player, set, indexInSet, centre, hit, damage)` and `CrashSummary(lines)`; `SpecResult(tick, phase, user, weapon, animationSeen, target, outcome, damage, energyUsed, hpRestored, prayerRestored)` where `weapon` is a `domain.drain.SpecWeapon` (`weaponRole()`, `specRole()`, `displayName()`) or null for an OTHER_WEAPON spec, and `SpecSummary(specs, ...)` with `ownSpecs()`; `PrayerReviewProjection.checkTick(Attack, Rules)` (package-private: the cast tick, or under HITSPLAT the landing tick when there is one, plus the offset; `PrayerCheckTick` of Task 2 mirrors it); the test helpers `KillLogBuilder.yamaCasts(Style)`, `impactOn(Actor, Style)`, `crashLine(int, int)`, `specAnimation(Actor, Role)`, `judgeSpawns()`, `judgeDespawns()`, the P3-skeleton fixture `com.yamareviewer.testing.Fights` (`P3_START = 40`) and `TestContext.empty()`; `Replay.review(KillLog)` in the test tools, serialising with `serializeNulls()`.
 
-1. `com.yamareviewer.domain.projection.Sections.ATTACKS` is a `SectionKey<AttackTimeline>` and `Sections.CRASHES` a `SectionKey<CrashSummary>`; `Sections.PRAYER_REVIEW`, `Sections.OPENER`, `Sections.TICK_LOG` and `Sections.SPECS` exist (their value types don't matter here: they are only hidden).
-2. `com.yamareviewer.domain.review.Attack` is a Lombok `@Value` whose getters are `getCastTick()` (int), `getPhase()` (`Phase`), `getStyle()` (`Style`, null when neither cast nor impact graphic was seen), `getTarget()` (`Actor`), `getLandingTick()` (`Integer`, null when nothing landed) and `getDamage()` (`Integer`, null when no hitsplat landed); an attack with an unknown style is still listed. `AttackTimeline.getAttacks()` returns the attacks in cast order.
-3. `com.yamareviewer.domain.review.CrashSummary.getLines()` returns `List<CrashLine>`; `CrashLine.getTick()` is the tick the line's fireballs appeared and `CrashLine.getPlayer()` the `Actor` (SELF or PARTNER) nearest its centre fireball.
-4. `KillLogBuilder.end(reason)` adds no END supplies snapshot; the fixture of Task 2 adds `supplies(SnapshotKind.END)` itself.
-5. `KillReviewAssembler.assemble` returns a review whose status is already computed; Part 4 calls `withRecomputedStatus()` again after setting `failedChecks`, which is harmless.
-6. `ReviewFormatter.format` collects its `ViewSection`s in a local mutable list before constructing the `ReviewView` (Task 10 says what to do when it doesn't).
-7. `ReviewPanel` reserved a footer container (the brief: "footer reserved for Part 4's Report a problem"); Task 12 calls it `footerSlot` and says how to add one when Part 2 left no container. `ReviewPanel.show(ReviewView, String, HistoryIndex)` is where each new review arrives.
-8. The Part 2 `YamaReviewerPlugin.startUp` has locals `files` (the `FilepathFileStore`), `ids`, `executor`, `panel` (the `ReviewPanel`) and the `KillEndedHandler` and `GameEventListener` constructor calls of the brief; Task 12 shows what to append to them.
-9. The Part 2 `Replay` tool (test sources) calls `builder.run(...)` and then `KillReviewAssembler.assemble(...)`.
-10. Part 2's `KillEndedHandlerTest` and the silence replay test construct `KillEndedHandler` and `GameEventListener` with the brief's constructors; Tasks 10 and 11 append arguments to those calls.
+Part 4's own fixture is therefore called `CheckFights` (Task 2): whole synthetic kills with 40-tick phases that the standard projections read end to end, built on Part 3's builder helpers. It is not Part 3's `Fights` skeleton.
 
-Everything else this plan uses from Parts 2 and 3 is binding in the brief: `Section<T>`, `HiddenReason`, `ProjectionContext`, `ReviewBuilder`, `Projections.standard()`, `KillReviewAssembler`, `KillReview` (`toBuilder()`, `withRecomputedStatus()`), `PhaseTimes`/`PhaseSpan`, `DamageSummary`, `ContractRules`, `Contract`, `Mode`, `Phase`, `Style`, `ReviewSettings`, `ReviewRepository`, `ReviewPublisher`, `HistoryProjector`, `ReviewFormatter`/`ReviewView`/`ViewSection`, `KillLogBuilder`, `TestIds`.
+What is still assumed about Part 2 (check before Task 2; where a name differs, change the Part 4 code, never Part 2):
+
+1. `KillLogBuilder.end(reason)` adds no END supplies snapshot; `CheckFights.finish` adds `supplies(SnapshotKind.END)` itself.
+2. `KillReviewAssembler.assemble` returns a review whose status is already computed; Part 4 calls `withRecomputedStatus()` again after setting `failedChecks`, which is harmless.
+3. `ReviewFormatter.format` collects its `ViewSection`s in a local mutable list called `sections` (Part 3 Task 15 inserts into it too; Task 10 says what to do when it is immutable).
+4. `ReviewPanel` reserved a footer container (the brief: "footer reserved for Part 4's Report a problem"); Task 12 calls it `footerSlot` and says how to add one when Part 2 left no container. `ReviewPanel.show(ReviewView, String, HistoryIndex)` is where each new review arrives.
+5. The Part 2 `YamaReviewerPlugin.startUp` has locals `files` (the `FilepathFileStore`), `ids`, `executor`, `panel` (the `ReviewPanel`) and the `KillEndedHandler` and `GameEventListener` constructor calls of the brief; Task 12 shows what to append to them.
+6. Part 2's `KillEndedHandlerTest` and the silence replay test construct `KillEndedHandler` and `GameEventListener` with the brief's constructors; Tasks 10 and 11 append arguments to those calls.
+
+Everything else this plan uses from Part 2 is binding in the brief: `Section<T>`, `HiddenReason`, `ProjectionContext`, `ReviewBuilder`, `Projections.standard()`, `KillReviewAssembler`, `KillReview` (`toBuilder()`, `withRecomputedStatus()`), `PhaseTimes`/`PhaseSpan`, `DamageSummary`, `ContractRules`, `Contract`, `Mode`, `Phase`, `Style`, `ReviewSettings`, `ReviewRepository`, `ReviewPublisher`, `HistoryProjector`, `ReviewFormatter`/`ReviewView`/`ViewSection`, `KillLogBuilder`, `TestIds`.
 
 ## Global Constraints
 
@@ -81,8 +81,8 @@ src/main/java/com/yamareviewer/
   adapter/ui/ReportProblemFooter.java
   adapter/ui/ReviewPanel.java                MODIFIED: footer slot, refresh on show and activate
 src/test/java/com/yamareviewer/
-  testing/Fights.java                        synthetic fights that drive the real projections
-  testing/FightsTest.java
+  testing/CheckFights.java                   whole synthetic kills that drive the real projections (Part 3 owns testing/Fights)
+  testing/CheckFightsTest.java
   domain/health/*Test.java, domain/diagnosis/CandidateFinderTest.java, domain/text/{ReportWriterTest,EventLineTest,IssueLinkTest,ReviewFormatterFailedChecksTest}.java
   domain/review/KillReviewFailedChecksTest.java
   application/handler/{ProblemReporterTest,KillEndedHandlerChecksTest}.java
@@ -679,17 +679,17 @@ git commit -m "feat: add the health check contract and the runner that hides fai
 ### Task 2: Synthetic fights and the shared evidence helpers
 
 **Files:**
-- Create: `src/test/java/com/yamareviewer/testing/Fights.java`
+- Create: `src/test/java/com/yamareviewer/testing/CheckFights.java`
 - Create: `src/main/java/com/yamareviewer/domain/health/TickStateIndex.java`, `PrayerCheckTick.java`, `PrayedAttack.java`, `PrayedAttacks.java`, `SpecDrop.java`, `SpecEnergyDrops.java`
-- Test: `src/test/java/com/yamareviewer/testing/FightsTest.java`, `src/test/java/com/yamareviewer/domain/health/TickStateIndexTest.java`, `SpecEnergyDropsTest.java`, `PrayedAttacksTest.java`
+- Test: `src/test/java/com/yamareviewer/testing/CheckFightsTest.java`, `src/test/java/com/yamareviewer/domain/health/TickStateIndexTest.java`, `SpecEnergyDropsTest.java`, `PrayedAttacksTest.java`
 
 **Interfaces:**
-- Consumes: `KillLogBuilder`, `TestIds` (Part 2 test support); `ReviewBuilder`, `Projections.standard()`, `ReviewSettings`, `Sections` (Part 2/3); `Attack`, `AttackTimeline` (Part 3, assumed fields 1–3); `Rules`, `PrayerCheck`, `TickState`, `Role`, `IdRegistry` (Part 1).
-- Produces: `Fights` (solo/duo fixtures with `soloUntilP3()`, `duoUntilP3()`, `untilP3`, `judgePhase`, `attack`, `blockedAttacks`, `crashLine`, `crashSet`, `emberlightSpec`, `finish`, `healthySolo()`, `context`, `castGraphic`, `impactGraphic`, `alternating`, `correct`, `wrong`, constants `CYCLE`, `P3_START`, `SELF_X`, `SELF_Y`, `PARTNER_X`, `PARTNER_Y`); `TickStateIndex.of(KillLog)` with `at(int)` and `prayersAt(int)`; `PrayerCheckTick.of(Attack, Rules)` returning `OptionalInt`; `PrayedAttack(Attack attack, int checkTick, Set<ProtectionPrayer> prayers)` with `damage()`, `correctPrayer()`, `prayedCorrectly()`, `prayedAgainstMagicOrRanged()`, static `correctPrayer(Style)`; `PrayedAttacks.onSelf(List<Attack>, KillLog, Rules, Phase phaseOrNull)`; `SpecDrop(tick, energyBefore, energyAfter, weaponId, weaponRole, matched)` with `unmatchedKnownWeapon()`; `SpecEnergyDrops.find(KillLog, IdRegistry)`, `SpecEnergyDrops.SPEC_ROLES`, `SpecEnergyDrops.WEAPON_ROLES`.
+- Consumes: `KillLogBuilder`, `TestIds` (Part 2 test support) with Part 3's helpers `yamaCasts`, `impactOn`, `crashLine`, `specAnimation`, `judgeSpawns`, `judgeDespawns`; `ReviewBuilder`, `Projections.standard()`, `ReviewSettings`, `Sections` (Part 2/3); `Attack`, `AttackTimeline` (Part 3); `Rules`, `PrayerCheck`, `TickState`, `Role`, `IdRegistry` (Part 1).
+- Produces: `CheckFights` (solo/duo fixtures with `soloUntilP3()`, `duoUntilP3()`, `untilP3`, `judgePhase`, `attack`, `blockedAttacks`, `crashLine`, `crashSet`, `emberlightSpec`, `finish`, `healthySolo()`, `context`, `castGraphic`, `impactGraphic`, `alternating`, `correct`, `wrong`, constants `CYCLE`, `P3_START`, `SELF_X`, `SELF_Y`, `PARTNER_X`, `PARTNER_Y`); `TickStateIndex.of(KillLog)` with `at(int)` and `prayersAt(int)`; `PrayerCheckTick.of(Attack, Rules)` returning the check tick L exactly as Part 3's `PrayerReviewProjection.checkTick` does; `PrayedAttack(Attack attack, int checkTick, Set<ProtectionPrayer> prayers)` with `damage()`, `correctPrayer()`, `prayedCorrectly()`, `prayedAgainstMagicOrRanged()`, static `correctPrayer(Style)`; `PrayedAttacks.onSelf(List<Attack>, KillLog, Rules, Phase phaseOrNull)`; `SpecDrop(tick, energyBefore, energyAfter, weaponId, weaponRole, matched)` with `unmatchedKnownWeapon()`; `SpecEnergyDrops.find(KillLog, IdRegistry)`, `SpecEnergyDrops.SPEC_ROLES`, `SpecEnergyDrops.WEAPON_ROLES`.
 
 - [ ] **Step 1: Write the fixture**
 
-`src/test/java/com/yamareviewer/testing/Fights.java`:
+`src/test/java/com/yamareviewer/testing/CheckFights.java` (Part 3's `Fights` is a bare 10-tick-phase skeleton for projection unit tests; this one builds whole kills the standard projections read end to end):
 
 ```java
 package com.yamareviewer.testing;
@@ -709,11 +709,13 @@ import com.yamareviewer.domain.projection.ReviewBuilder;
 import com.yamareviewer.domain.projection.ReviewSettings;
 
 /**
- * Synthetic kills that drive the Part 2 and Part 3 projections the way a recorded fight does (spec 6.2, 6.4,
- * 6.5, 6.6 and 6.9), with TestIds. Every helper leaves the builder's cursor on the tick after what it added.
+ * Whole synthetic kills that drive the Part 2 and Part 3 projections the way a recorded fight does (spec 6.2,
+ * 6.4, 6.5, 6.6 and 6.9), built on Part 3's KillLogBuilder helpers (yamaCasts, impactOn, crashLine, judgeSpawns,
+ * judgeDespawns, specAnimation) with TestIds. Every helper leaves the cursor on the tick after what it added.
  * P1 attacks are never 7 ticks apart here, because that would make ContractProjection see a contract (spec 6.3).
+ * Part 3's testing.Fights is a 10-tick-phase skeleton for projection unit tests; this fixture is for the checks.
  */
-public final class Fights
+public final class CheckFights
 {
 	/** The P3 attack cycle in ticks (spec 3). */
 	public static final int CYCLE = 7;
@@ -724,7 +726,7 @@ public final class Fights
 	public static final int PARTNER_X = 3210;
 	public static final int PARTNER_Y = 3210;
 
-	private Fights()
+	private CheckFights()
 	{
 	}
 
@@ -764,9 +766,7 @@ public final class Fights
 	/** A 20-tick Judge phase: the Judge spawns at the cursor and despawns dying 20 ticks later (spec 6.2). */
 	public static KillLogBuilder judgePhase(KillLogBuilder kill)
 	{
-		return kill.npcSpawns(Actor.JUDGE, TestIds.id(Role.JUDGE))
-			.ticks(20)
-			.npcDespawns(Actor.JUDGE, TestIds.id(Role.JUDGE), true);
+		return kill.judgeSpawns().ticks(20).judgeDespawns();
 	}
 
 	public static int castGraphic(Style style)
@@ -788,10 +788,9 @@ public final class Fights
 	{
 		return kill.prayers(prayersAtCast)
 			.yamaTarget(target)
-			.yamaAnimates(TestIds.id(Role.YAMA_STANDARD_ATTACK))
-			.graphicOn(Actor.YAMA, castGraphic(style))
+			.yamaCasts(style)
 			.ticks(2)
-			.graphicOn(target, impactGraphic(style))
+			.impactOn(target, style)
 			.hitsplatOn(target, damage)
 			.ticks(CYCLE - 2);
 	}
@@ -825,8 +824,7 @@ public final class Fights
 	/** One crash line at the cursor: three CRASH_FIREBALL ground graphics in a row centred on (x, y) (spec 6.6). */
 	public static KillLogBuilder crashLine(KillLogBuilder kill, int x, int y)
 	{
-		int fireball = TestIds.id(Role.CRASH_FIREBALL);
-		return kill.groundGraphic(fireball, x - 1, y).groundGraphic(fireball, x, y).groundGraphic(fireball, x + 1, y);
+		return kill.crashLine(x, y);
 	}
 
 	/** A complete crash set for the player at (x, y): three lines two ticks apart. Advances the cursor CYCLE ticks. */
@@ -845,7 +843,7 @@ public final class Fights
 	public static KillLogBuilder emberlightSpec(KillLogBuilder kill, int energyBefore)
 	{
 		return kill.weapon(TestIds.id(Role.WEAPON_EMBERLIGHT)).spec(energyBefore).endTick()
-			.animates(Actor.SELF, TestIds.id(Role.SPEC_EMBERLIGHT)).myHitOn(Actor.YAMA, 40).spec(energyBefore - 25).endTick()
+			.specAnimation(Actor.SELF, Role.SPEC_EMBERLIGHT).myHitOn(Actor.YAMA, 40).spec(energyBefore - 25).endTick()
 			.ticks(CYCLE - 2);
 	}
 
@@ -881,7 +879,7 @@ public final class Fights
 
 - [ ] **Step 2: Write the failing tests**
 
-`src/test/java/com/yamareviewer/testing/FightsTest.java` pins what the health-check tests assume about how Parts 2 and 3 read a synthetic fight. If it fails, adjust `Fights` (never the projections) until it passes; the spec rules it follows are 6.2, 6.4, 6.6 and 6.9.
+`src/test/java/com/yamareviewer/testing/CheckFightsTest.java` pins what the health-check tests assume about how Parts 2 and 3 read a synthetic fight. If it fails, adjust `CheckFights` (never the projections) until it passes; the spec rules it follows are 6.2, 6.4, 6.6 and 6.9.
 
 ```java
 package com.yamareviewer.testing;
@@ -904,25 +902,25 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 /** Pins the assumptions the health-check tests make about how Parts 2 and 3 read a synthetic fight. */
-public class FightsTest
+public class CheckFightsTest
 {
 	@Test
 	public void aHealthySoloKillProjectsAllPhasesAttacksCrashesAndSpecs()
 	{
-		ProjectionContext context = Fights.context(Fights.healthySolo());
+		ProjectionContext context = CheckFights.context(CheckFights.healthySolo());
 
 		PhaseTimes phases = context.value(Sections.PHASES).orElseThrow();
 		assertEquals(List.of(Phase.P1, Phase.JUDGE_1, Phase.P2, Phase.JUDGE_2, Phase.P3),
 			phases.getSpans().stream().map(PhaseSpan::getPhase).collect(toList()));
-		assertEquals(Fights.P3_START, phases.span(Phase.P3).orElseThrow().getStartTick());
+		assertEquals(CheckFights.P3_START, phases.span(Phase.P3).orElseThrow().getStartTick());
 
 		List<Attack> attacks = context.value(Sections.ATTACKS).orElseThrow().getAttacks();
 		assertEquals(20, attacks.stream().filter(attack -> attack.getPhase() == Phase.P3).count());
 		Attack first = attacks.get(0);
-		assertEquals(Fights.P3_START, first.getCastTick());
+		assertEquals(CheckFights.P3_START, first.getCastTick());
 		assertEquals(Style.MAGIC, first.getStyle());
 		assertEquals(Actor.SELF, first.getTarget());
-		assertEquals(Integer.valueOf(Fights.P3_START + 2), first.getLandingTick());
+		assertEquals(Integer.valueOf(CheckFights.P3_START + 2), first.getLandingTick());
 		assertEquals(Integer.valueOf(2), first.getDamage());
 		assertEquals(Style.RANGED, attacks.get(1).getStyle());
 
@@ -936,10 +934,10 @@ public class FightsTest
 	@Test
 	public void aDuoKillHasAPartnerAndAttacksOnBoth()
 	{
-		var kill = Fights.duoUntilP3();
-		Fights.attack(kill, Style.MAGIC, Actor.SELF, 2, Fights.correct(Style.MAGIC));
-		Fights.attack(kill, Style.RANGED, Actor.PARTNER, 2);
-		ProjectionContext context = Fights.context(Fights.finish(kill, EndReason.YAMA_DIED));
+		var kill = CheckFights.duoUntilP3();
+		CheckFights.attack(kill, Style.MAGIC, Actor.SELF, 2, CheckFights.correct(Style.MAGIC));
+		CheckFights.attack(kill, Style.RANGED, Actor.PARTNER, 2);
+		ProjectionContext context = CheckFights.context(CheckFights.finish(kill, EndReason.YAMA_DIED));
 
 		assertEquals(Optional.of(Mode.DUO_HOST), context.value(Sections.MODE));
 		List<Attack> attacks = context.value(Sections.ATTACKS).orElseThrow().getAttacks();
@@ -1090,7 +1088,7 @@ import com.yamareviewer.domain.model.Phase;
 import com.yamareviewer.domain.model.Style;
 import com.yamareviewer.domain.projection.Sections;
 import com.yamareviewer.domain.review.Attack;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.KillLogBuilder;
 import java.util.List;
 import static org.junit.Assert.assertEquals;
@@ -1102,22 +1100,22 @@ public class PrayedAttacksTest
 {
 	private static List<Attack> attacks(KillLog log, Rules rules)
 	{
-		return Fights.context(log, rules).value(Sections.ATTACKS).orElseThrow().getAttacks();
+		return CheckFights.context(log, rules).value(Sections.ATTACKS).orElseThrow().getAttacks();
 	}
 
 	@Test
 	public void readsSelfPrayersAtTheCastTickAndLeavesOtherTargetsOut()
 	{
-		KillLogBuilder kill = Fights.duoUntilP3();
-		Fights.attack(kill, Style.MAGIC, Actor.SELF, 2, ProtectionPrayer.MAGIC);
-		Fights.attack(kill, Style.RANGED, Actor.SELF, 9, ProtectionPrayer.MELEE);
-		Fights.attack(kill, Style.MAGIC, Actor.PARTNER, 9);
-		KillLog log = Fights.finish(kill, EndReason.YAMA_DIED);
+		KillLogBuilder kill = CheckFights.duoUntilP3();
+		CheckFights.attack(kill, Style.MAGIC, Actor.SELF, 2, ProtectionPrayer.MAGIC);
+		CheckFights.attack(kill, Style.RANGED, Actor.SELF, 9, ProtectionPrayer.MELEE);
+		CheckFights.attack(kill, Style.MAGIC, Actor.PARTNER, 9);
+		KillLog log = CheckFights.finish(kill, EndReason.YAMA_DIED);
 
 		List<PrayedAttack> prayed = PrayedAttacks.onSelf(attacks(log, Rules.DEFAULT), log, Rules.DEFAULT, Phase.P3);
 
 		assertEquals(2, prayed.size());
-		assertEquals(Fights.P3_START, prayed.get(0).getCheckTick());
+		assertEquals(CheckFights.P3_START, prayed.get(0).getCheckTick());
 		assertTrue(prayed.get(0).prayedCorrectly());
 		assertTrue(prayed.get(0).prayedAgainstMagicOrRanged());
 		assertEquals(2, prayed.get(0).damage());
@@ -1131,19 +1129,19 @@ public class PrayedAttacksTest
 	public void hitsplatModeUsesTheLandingTickPlusTheOffset()
 	{
 		Rules rules = Rules.DEFAULT.toBuilder().prayerCheck(PrayerCheck.HITSPLAT).prayerCheckOffset(1).build();
-		KillLog log = Fights.finish(Fights.blockedAttacks(Fights.soloUntilP3(), 2), EndReason.YAMA_DIED);
+		KillLog log = CheckFights.finish(CheckFights.blockedAttacks(CheckFights.soloUntilP3(), 2), EndReason.YAMA_DIED);
 
 		List<PrayedAttack> prayed = PrayedAttacks.onSelf(attacks(log, rules), log, rules, null);
 
 		assertEquals(2, prayed.size());
-		assertEquals(Fights.P3_START + 3, prayed.get(0).getCheckTick());
+		assertEquals(CheckFights.P3_START + 3, prayed.get(0).getCheckTick());
 	}
 }
 ```
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
-Run: `./gradlew test --tests 'com.yamareviewer.testing.FightsTest' --tests 'com.yamareviewer.domain.health.*'`
+Run: `./gradlew test --tests 'com.yamareviewer.testing.CheckFightsTest' --tests 'com.yamareviewer.domain.health.*'`
 Expected: FAIL — `cannot find symbol` for `TickStateIndex`, `SpecEnergyDrops`, `SpecDrop`, `PrayedAttacks`, `PrayedAttack`.
 
 - [ ] **Step 4: Write the helpers**
@@ -1202,24 +1200,24 @@ package com.yamareviewer.domain.health;
 import com.yamareviewer.domain.ids.PrayerCheck;
 import com.yamareviewer.domain.ids.Rules;
 import com.yamareviewer.domain.review.Attack;
-import java.util.OptionalInt;
 
-/** The prayer-check tick L of spec 6.5: the cast tick, or the landing tick, plus the configured offset. */
+/**
+ * The prayer-check tick L of spec 6.5: the cast tick, or under HITSPLAT the landing tick (the cast tick when
+ * nothing landed), plus the offset. Mirrors Part 3's package-private PrayerReviewProjection.checkTick, so the
+ * checks judge the tick the prayer review scored; keep the two in step.
+ */
 public final class PrayerCheckTick
 {
 	private PrayerCheckTick()
 	{
 	}
 
-	/** Empty when the check is on the hitsplat and the attack never landed. */
-	public static OptionalInt of(Attack attack, Rules rules)
+	public static int of(Attack attack, Rules rules)
 	{
-		if (rules.getPrayerCheck() == PrayerCheck.HITSPLAT)
-		{
-			Integer landing = attack.getLandingTick();
-			return landing == null ? OptionalInt.empty() : OptionalInt.of(landing + rules.getPrayerCheckOffset());
-		}
-		return OptionalInt.of(attack.getCastTick() + rules.getPrayerCheckOffset());
+		int base = rules.getPrayerCheck() == PrayerCheck.HITSPLAT && attack.getLandingTick() != null
+			? attack.getLandingTick()
+			: attack.getCastTick();
+		return base + rules.getPrayerCheckOffset();
 	}
 }
 ```
@@ -1287,7 +1285,6 @@ import com.yamareviewer.domain.review.Attack;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalInt;
 
 /** Attacks with behaviour evidence (spec 6.4): aimed at SELF, style and damage known, with SELF's prayers at the check tick. */
 public final class PrayedAttacks
@@ -1311,15 +1308,11 @@ public final class PrayedAttacks
 			{
 				continue;
 			}
-			OptionalInt tick = PrayerCheckTick.of(attack, rules);
-			if (tick.isEmpty())
-			{
-				continue;
-			}
-			Optional<TickState> state = states.at(tick.getAsInt());
+			int tick = PrayerCheckTick.of(attack, rules);
+			Optional<TickState> state = states.at(tick);
 			if (state.isPresent())
 			{
-				result.add(new PrayedAttack(attack, tick.getAsInt(), state.get().getPrayers()));
+				result.add(new PrayedAttack(attack, tick, state.get().getPrayers()));
 			}
 		}
 		return List.copyOf(result);
@@ -1431,8 +1424,8 @@ public final class SpecEnergyDrops
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `./gradlew test --tests 'com.yamareviewer.testing.FightsTest' --tests 'com.yamareviewer.domain.health.*'`
-Expected: PASS (22 tests: 12 from Task 1, 2 in `FightsTest`, 1 in `TickStateIndexTest`, 5 in `SpecEnergyDropsTest`, 2 in `PrayedAttacksTest`). If `FightsTest` fails, fix `Fights` against the real projections (assumed fields 1–4) before going on: every later task builds on it.
+Run: `./gradlew test --tests 'com.yamareviewer.testing.CheckFightsTest' --tests 'com.yamareviewer.domain.health.*'`
+Expected: PASS (22 tests: 12 from Task 1, 2 in `CheckFightsTest`, 1 in `TickStateIndexTest`, 5 in `SpecEnergyDropsTest`, 2 in `PrayedAttacksTest`). If `CheckFightsTest` fails, fix `CheckFights` against the real projections (Part 3's types are listed at the top of the plan) before going on: every later task builds on it.
 
 - [ ] **Step 6: Commit**
 
@@ -1450,7 +1443,7 @@ git commit -m "feat: add synthetic fights and the evidence helpers the health ch
 - Test: `src/test/java/com/yamareviewer/domain/health/PhaseOrderCheckTest.java`, `SuppliesSnapshotCheckTest.java`
 
 **Interfaces:**
-- Consumes: `HealthCheck`, `CheckResult` (Task 1); `Fights` (Task 2); `PhaseTimes`, `PhaseSpan`, `Sections.PHASES` (Part 2); `SuppliesSnapshot`, `SnapshotKind`, `EndReason` (Part 1).
+- Consumes: `HealthCheck`, `CheckResult` (Task 1); `CheckFights` (Task 2); `PhaseTimes`, `PhaseSpan`, `Sections.PHASES` (Part 2); `SuppliesSnapshot`, `SnapshotKind`, `EndReason` (Part 1).
 - Produces: `PhaseOrderCheck` (name "PhaseOrder", hides PHASES, DAMAGE, PRAYER_REVIEW, OPENER, TICK_LOG; roles JUDGE, PHASE_VARBIT, PHASE_TRANSITION_TEXT, PHASE_TRANSITION_GRAPHIC); `SuppliesSnapshotCheck` (name "SuppliesSnapshot", hides SUPPLIES, no roles). Both have public no-arg constructors.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1473,7 +1466,7 @@ import com.yamareviewer.domain.projection.Sections;
 import com.yamareviewer.domain.review.PhaseSpan;
 import com.yamareviewer.domain.review.PhaseTimes;
 import com.yamareviewer.domain.review.Section;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.KillLogBuilder;
 import com.yamareviewer.testing.TestIds;
 import java.util.List;
@@ -1490,34 +1483,34 @@ public class PhaseOrderCheckTest
 
 	private CheckResult run(KillLog log)
 	{
-		return check.check(log, Fights.context(log));
+		return check.check(log, CheckFights.context(log));
 	}
 
 	@Test
 	public void aFullKillPasses()
 	{
-		assertEquals(CheckResult.pass(), run(Fights.healthySolo()));
+		assertEquals(CheckResult.pass(), run(CheckFights.healthySolo()));
 	}
 
 	@Test
 	public void deathBeforeP3IsNotAFailure()
 	{
-		KillLogBuilder kill = Fights.solo().ticks(40);
-		Fights.judgePhase(kill).ticks(10);
+		KillLogBuilder kill = CheckFights.solo().ticks(40);
+		CheckFights.judgePhase(kill).ticks(10);
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.PLAYER_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.PLAYER_DIED)));
 	}
 
 	@Test
 	public void leavingInP1IsNotAFailure()
 	{
-		assertEquals(CheckResult.pass(), run(Fights.solo().ticks(30).build()));
+		assertEquals(CheckResult.pass(), run(CheckFights.solo().ticks(30).build()));
 	}
 
 	@Test
 	public void aKillWhereYamaDiedWithoutAllPhasesFails()
 	{
-		KillLog log = Fights.finish(Fights.solo().ticks(50), EndReason.YAMA_DIED);
+		KillLog log = CheckFights.finish(CheckFights.solo().ticks(50), EndReason.YAMA_DIED);
 
 		CheckResult result = run(log);
 
@@ -1530,7 +1523,7 @@ public class PhaseOrderCheckTest
 	@Test
 	public void phasesOutOfOrderFail()
 	{
-		KillLog log = Fights.solo().ticks(80).build();
+		KillLog log = CheckFights.solo().ticks(80).build();
 		ProjectionContext context = new ProjectionContext(TestIds.registry(), Rules.DEFAULT, ReviewSettings.DEFAULT);
 		context.put(Sections.PHASES, Section.ok(new PhaseTimes(
 			List.of(new PhaseSpan(Phase.P1, 0, 40), new PhaseSpan(Phase.P2, 40, 80)), 80)));
@@ -1547,7 +1540,7 @@ public class PhaseOrderCheckTest
 	{
 		ProjectionContext context = new ProjectionContext(TestIds.registry(), Rules.DEFAULT, ReviewSettings.DEFAULT);
 
-		assertTrue(check.check(Fights.solo().build(), context).skipped());
+		assertTrue(check.check(CheckFights.solo().build(), context).skipped());
 	}
 
 	@Test
@@ -1583,7 +1576,7 @@ import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.projection.ProjectionContext;
 import com.yamareviewer.domain.projection.ReviewSettings;
 import com.yamareviewer.domain.projection.Sections;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.TestIds;
 import java.util.List;
 import java.util.OptionalInt;
@@ -1601,13 +1594,13 @@ public class SuppliesSnapshotCheckTest
 	@Test
 	public void bothSnapshotsPass()
 	{
-		assertEquals(CheckResult.pass(), check.check(Fights.healthySolo(), context));
+		assertEquals(CheckResult.pass(), check.check(CheckFights.healthySolo(), context));
 	}
 
 	@Test
 	public void aMissingEndSnapshotFails()
 	{
-		CheckResult result = check.check(Fights.solo().ticks(5).end(EndReason.YAMA_DIED), context);
+		CheckResult result = check.check(CheckFights.solo().ticks(5).end(EndReason.YAMA_DIED), context);
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("END"));
@@ -1633,7 +1626,7 @@ public class SuppliesSnapshotCheckTest
 	@Test
 	public void leftKillsAreNotChecked()
 	{
-		CheckResult result = check.check(Fights.solo().ticks(5).end(EndReason.LEFT), context);
+		CheckResult result = check.check(CheckFights.solo().ticks(5).end(EndReason.LEFT), context);
 
 		assertTrue(result.passed());
 		assertTrue(result.skipped());
@@ -1844,7 +1837,7 @@ git commit -m "feat: add the PhaseOrder and SuppliesSnapshot health checks"
 - Test: `src/test/java/com/yamareviewer/domain/health/P3AttackCountCheckTest.java`, `AlternationCheckTest.java`
 
 **Interfaces:**
-- Consumes: Tasks 1–2; `Sections.ATTACKS`, `AttackTimeline`, `Attack` (Part 3, assumed fields 1–2); `Rules.getP3AttackCycle()`, `getMinAttackCountRatio()`, `getMinCycleGapRatio()`, `getMinAlternationRatio()`; `ContractRules.isRandomAttackStyles()`.
+- Consumes: Tasks 1–2; `Sections.ATTACKS`, `AttackTimeline.inPhase(Phase)`, `Attack` (Part 3); `Rules.getP3AttackCycle()`, `getMinAttackCountRatio()`, `getMinCycleGapRatio()`, `getMinAlternationRatio()`; `ContractRules.isRandomAttackStyles()`.
 - Produces: `P3AttackCountCheck` (name "P3AttackCount"; hides PRAYER_REVIEW, OPENER, TICK_LOG; roles YAMA_STANDARD_ATTACK, YAMA_CAST_MAGIC, YAMA_CAST_RANGED; constants `MIN_CYCLES = 4`, `MIN_GAPS = 3`); `AlternationCheck` (name "Alternation"; hides PRAYER_REVIEW, OPENER; roles YAMA_CAST_*, IMPACT_*; constant `MIN_PAIRS = 5`; skipped under random attack styles).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1863,7 +1856,7 @@ import com.yamareviewer.domain.model.Contract;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.model.Style;
 import com.yamareviewer.domain.projection.Sections;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.KillLogBuilder;
 import java.util.List;
 import java.util.OptionalInt;
@@ -1879,52 +1872,52 @@ public class P3AttackCountCheckTest
 
 	private CheckResult run(KillLog log)
 	{
-		return check.check(log, Fights.context(log));
+		return check.check(log, CheckFights.context(log));
 	}
 
 	@Test
 	public void aHealthyKillPasses()
 	{
-		assertEquals(CheckResult.pass(), run(Fights.healthySolo()));
+		assertEquals(CheckResult.pass(), run(CheckFights.healthySolo()));
 	}
 
 	@Test
 	public void tooFewAttacksFail()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
-		Fights.blockedAttacks(kill, 3).ticks(150);
+		KillLogBuilder kill = CheckFights.soloUntilP3();
+		CheckFights.blockedAttacks(kill, 3).ticks(150);
 
-		CheckResult result = run(Fights.finish(kill, EndReason.YAMA_DIED));
+		CheckResult result = run(CheckFights.finish(kill, EndReason.YAMA_DIED));
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("3 standard attacks in 171 P3 ticks"));
-		assertEquals(OptionalInt.of(Fights.P3_START), result.tick());
+		assertEquals(OptionalInt.of(CheckFights.P3_START), result.tick());
 	}
 
 	@Test
 	public void irregularGapsFail()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
+		KillLogBuilder kill = CheckFights.soloUntilP3();
 		for (int i = 0; i < 12; i++)
 		{
-			Style style = Fights.alternating(i);
-			Fights.attack(kill, style, Actor.SELF, 2, Fights.correct(style)).ticks(3);
+			Style style = CheckFights.alternating(i);
+			CheckFights.attack(kill, style, Actor.SELF, 2, CheckFights.correct(style)).ticks(3);
 		}
 
-		CheckResult result = run(Fights.finish(kill, EndReason.YAMA_DIED));
+		CheckResult result = run(CheckFights.finish(kill, EndReason.YAMA_DIED));
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("0 of 11 gaps"));
-		assertEquals(OptionalInt.of(Fights.P3_START + 10), result.tick());
+		assertEquals(OptionalInt.of(CheckFights.P3_START + 10), result.tick());
 	}
 
 	@Test
 	public void noP3MeansNoEvidence()
 	{
-		KillLogBuilder kill = Fights.solo().ticks(40);
-		Fights.judgePhase(kill).ticks(10);
+		KillLogBuilder kill = CheckFights.solo().ticks(40);
+		CheckFights.judgePhase(kill).ticks(10);
 
-		CheckResult result = run(Fights.finish(kill, EndReason.PLAYER_DIED));
+		CheckResult result = run(CheckFights.finish(kill, EndReason.PLAYER_DIED));
 
 		assertTrue(result.passed());
 		assertTrue(result.skipped());
@@ -1933,9 +1926,9 @@ public class P3AttackCountCheckTest
 	@Test
 	public void aShortP3IsNoEvidence()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3().ticks(10);
+		KillLogBuilder kill = CheckFights.soloUntilP3().ticks(10);
 
-		assertTrue(run(Fights.finish(kill, EndReason.PLAYER_DIED)).skipped());
+		assertTrue(run(CheckFights.finish(kill, EndReason.PLAYER_DIED)).skipped());
 	}
 
 	@Test
@@ -1963,7 +1956,7 @@ import com.yamareviewer.domain.model.Contract;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.model.Style;
 import com.yamareviewer.domain.projection.Sections;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.KillLogBuilder;
 import com.yamareviewer.testing.TestIds;
 import java.util.List;
@@ -1980,7 +1973,7 @@ public class AlternationCheckTest
 
 	private CheckResult run(KillLog log)
 	{
-		return check.check(log, Fights.context(log));
+		return check.check(log, CheckFights.context(log));
 	}
 
 	private static Actor alternatingTarget(int index)
@@ -1991,80 +1984,80 @@ public class AlternationCheckTest
 	@Test
 	public void aHealthyKillPasses()
 	{
-		assertEquals(CheckResult.pass(), run(Fights.healthySolo()));
+		assertEquals(CheckResult.pass(), run(CheckFights.healthySolo()));
 	}
 
 	@Test
 	public void globalAlternationIsEnoughInDuo()
 	{
-		KillLogBuilder kill = Fights.duoUntilP3();
+		KillLogBuilder kill = CheckFights.duoUntilP3();
 		for (int i = 0; i < 12; i++)
 		{
-			Style style = Fights.alternating(i);
-			Fights.attack(kill, style, alternatingTarget(i), 2, Fights.correct(style));
+			Style style = CheckFights.alternating(i);
+			CheckFights.attack(kill, style, alternatingTarget(i), 2, CheckFights.correct(style));
 		}
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.YAMA_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.YAMA_DIED)));
 	}
 
 	@Test
 	public void perTargetAlternationIsEnough()
 	{
-		KillLogBuilder kill = Fights.duoUntilP3();
+		KillLogBuilder kill = CheckFights.duoUntilP3();
 		for (int i = 0; i < 12; i++)
 		{
 			Style style = (i / 2) % 2 == 0 ? Style.MAGIC : Style.RANGED;
-			Fights.attack(kill, style, alternatingTarget(i), 2, Fights.correct(style));
+			CheckFights.attack(kill, style, alternatingTarget(i), 2, CheckFights.correct(style));
 		}
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.YAMA_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.YAMA_DIED)));
 	}
 
 	@Test
 	public void noAlternationAnywhereFails()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
+		KillLogBuilder kill = CheckFights.soloUntilP3();
 		for (int i = 0; i < 12; i++)
 		{
 			Style style = i % 4 == 3 ? Style.RANGED : Style.MAGIC;
-			Fights.attack(kill, style, Actor.SELF, 2, Fights.correct(style));
+			CheckFights.attack(kill, style, Actor.SELF, 2, CheckFights.correct(style));
 		}
 
-		CheckResult result = run(Fights.finish(kill, EndReason.YAMA_DIED));
+		CheckResult result = run(CheckFights.finish(kill, EndReason.YAMA_DIED));
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("5 of 11 pairs"));
-		assertEquals(OptionalInt.of(Fights.P3_START + Fights.CYCLE), result.tick());
+		assertEquals(OptionalInt.of(CheckFights.P3_START + CheckFights.CYCLE), result.tick());
 	}
 
 	@Test
 	public void attacksWithAnUnknownStyleAreLeftOut()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
+		KillLogBuilder kill = CheckFights.soloUntilP3();
 		for (int i = 0; i < 12; i++)
 		{
 			if (i == 2)
 			{
-				kill.yamaAnimates(TestIds.id(Role.YAMA_STANDARD_ATTACK)).ticks(Fights.CYCLE);
+				kill.yamaAnimates(TestIds.id(Role.YAMA_STANDARD_ATTACK)).ticks(CheckFights.CYCLE);
 				continue;
 			}
-			Style style = Fights.alternating(i);
-			Fights.attack(kill, style, Actor.SELF, 2, Fights.correct(style));
+			Style style = CheckFights.alternating(i);
+			CheckFights.attack(kill, style, Actor.SELF, 2, CheckFights.correct(style));
 		}
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.YAMA_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.YAMA_DIED)));
 	}
 
 	@Test
 	public void tooFewPairsAreNoEvidence()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
+		KillLogBuilder kill = CheckFights.soloUntilP3();
 		for (int i = 0; i < 4; i++)
 		{
-			Fights.attack(kill, Style.MAGIC, Actor.SELF, 2, Fights.correct(Style.MAGIC));
+			CheckFights.attack(kill, Style.MAGIC, Actor.SELF, 2, CheckFights.correct(Style.MAGIC));
 		}
 
-		assertTrue(run(Fights.finish(kill, EndReason.YAMA_DIED)).skipped());
+		assertTrue(run(CheckFights.finish(kill, EndReason.YAMA_DIED)).skipped());
 	}
 
 	@Test
@@ -2162,8 +2155,7 @@ public final class P3AttackCountCheck implements HealthCheck
 		{
 			return CheckResult.skipped(String.format("P3 lasted %d ticks, fewer than %d cycles of %d", ticks, MIN_CYCLES, cycle));
 		}
-		List<Integer> casts = timeline.get().getAttacks().stream()
-			.filter(attack -> attack.getPhase() == Phase.P3)
+		List<Integer> casts = timeline.get().inPhase(Phase.P3).stream()
 			.map(Attack::getCastTick)
 			.sorted()
 			.collect(Collectors.toList());
@@ -2266,8 +2258,7 @@ public final class AlternationCheck implements HealthCheck
 		{
 			return CheckResult.skipped("attacks not available");
 		}
-		List<Attack> p3 = timeline.get().getAttacks().stream()
-			.filter(attack -> attack.getPhase() == Phase.P3)
+		List<Attack> p3 = timeline.get().inPhase(Phase.P3).stream()
 			.sorted(Comparator.comparingInt(Attack::getCastTick))
 			.collect(Collectors.toList());
 		Pairs global = pairs(p3);
@@ -2382,7 +2373,7 @@ import com.yamareviewer.domain.model.Contract;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.model.Style;
 import com.yamareviewer.domain.projection.Sections;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.KillLogBuilder;
 import com.yamareviewer.testing.TestIds;
 import java.util.List;
@@ -2399,74 +2390,74 @@ public class BlockedDamageCheckTest
 
 	private CheckResult run(KillLog log)
 	{
-		return check.check(log, Fights.context(log));
+		return check.check(log, CheckFights.context(log));
 	}
 
 	@Test
 	public void blockedHitsWithinTheMaxPass()
 	{
-		assertEquals(CheckResult.pass(), run(Fights.healthySolo()));
+		assertEquals(CheckResult.pass(), run(CheckFights.healthySolo()));
 	}
 
 	@Test
 	public void twoHardBlockedHitsFail()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
-		Fights.blockedAttacks(kill, 4);
-		Fights.attack(kill, Style.MAGIC, Actor.SELF, 12, Fights.correct(Style.MAGIC));
-		Fights.blockedAttacks(kill, 3);
-		Fights.attack(kill, Style.RANGED, Actor.SELF, 15, Fights.correct(Style.RANGED));
-		Fights.blockedAttacks(kill, 2);
+		KillLogBuilder kill = CheckFights.soloUntilP3();
+		CheckFights.blockedAttacks(kill, 4);
+		CheckFights.attack(kill, Style.MAGIC, Actor.SELF, 12, CheckFights.correct(Style.MAGIC));
+		CheckFights.blockedAttacks(kill, 3);
+		CheckFights.attack(kill, Style.RANGED, Actor.SELF, 15, CheckFights.correct(Style.RANGED));
+		CheckFights.blockedAttacks(kill, 2);
 
-		CheckResult result = run(Fights.finish(kill, EndReason.YAMA_DIED));
+		CheckResult result = run(CheckFights.finish(kill, EndReason.YAMA_DIED));
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("2 of 11"));
-		assertEquals(OptionalInt.of(Fights.P3_START + 4 * Fights.CYCLE), result.tick());
+		assertEquals(OptionalInt.of(CheckFights.P3_START + 4 * CheckFights.CYCLE), result.tick());
 	}
 
 	@Test
 	public void oneHardBlockedHitIsTolerated()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
-		Fights.blockedAttacks(kill, 4);
-		Fights.attack(kill, Style.MAGIC, Actor.SELF, 12, Fights.correct(Style.MAGIC));
-		Fights.blockedAttacks(kill, 5);
+		KillLogBuilder kill = CheckFights.soloUntilP3();
+		CheckFights.blockedAttacks(kill, 4);
+		CheckFights.attack(kill, Style.MAGIC, Actor.SELF, 12, CheckFights.correct(Style.MAGIC));
+		CheckFights.blockedAttacks(kill, 5);
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.YAMA_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.YAMA_DIED)));
 	}
 
 	@Test
 	public void wrongPrayerHitsAreNotBlockedAttacks()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
+		KillLogBuilder kill = CheckFights.soloUntilP3();
 		for (int i = 0; i < 6; i++)
 		{
-			Style style = Fights.alternating(i);
-			Fights.attack(kill, style, Actor.SELF, 20, Fights.wrong(style));
+			Style style = CheckFights.alternating(i);
+			CheckFights.attack(kill, style, Actor.SELF, 20, CheckFights.wrong(style));
 		}
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.YAMA_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.YAMA_DIED)));
 	}
 
 	@Test
 	public void hitsplatModeChecksTheLandingTick()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
+		KillLogBuilder kill = CheckFights.soloUntilP3();
 		for (int i = 0; i < 3; i++)
 		{
-			Style style = Fights.alternating(i);
+			Style style = CheckFights.alternating(i);
 			kill.prayers().yamaTarget(Actor.SELF)
-				.yamaAnimates(TestIds.id(Role.YAMA_STANDARD_ATTACK)).graphicOn(Actor.YAMA, Fights.castGraphic(style))
+				.yamaAnimates(TestIds.id(Role.YAMA_STANDARD_ATTACK)).graphicOn(Actor.YAMA, CheckFights.castGraphic(style))
 				.ticks(2)
-				.prayers(Fights.correct(style)).graphicOn(Actor.SELF, Fights.impactGraphic(style)).hitsplatOn(Actor.SELF, 12)
-				.ticks(Fights.CYCLE - 2);
+				.prayers(CheckFights.correct(style)).graphicOn(Actor.SELF, CheckFights.impactGraphic(style)).hitsplatOn(Actor.SELF, 12)
+				.ticks(CheckFights.CYCLE - 2);
 		}
-		KillLog log = Fights.finish(kill, EndReason.YAMA_DIED);
+		KillLog log = CheckFights.finish(kill, EndReason.YAMA_DIED);
 		Rules hitsplat = Rules.DEFAULT.toBuilder().prayerCheck(PrayerCheck.HITSPLAT).build();
 
-		assertEquals(CheckResult.pass(), check.check(log, Fights.context(log)));
-		assertFalse(check.check(log, Fights.context(log, hitsplat)).passed());
+		assertEquals(CheckResult.pass(), check.check(log, CheckFights.context(log)));
+		assertFalse(check.check(log, CheckFights.context(log, hitsplat)).passed());
 	}
 
 	@Test
@@ -2498,7 +2489,7 @@ import com.yamareviewer.domain.model.Contract;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.model.Style;
 import com.yamareviewer.domain.projection.Sections;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.KillLogBuilder;
 import java.util.List;
 import java.util.OptionalInt;
@@ -2514,7 +2505,7 @@ public class GraphicVsBehaviourCheckTest
 
 	private CheckResult run(KillLog log)
 	{
-		return check.check(log, Fights.context(log));
+		return check.check(log, CheckFights.context(log));
 	}
 
 	/** {@code count} alternating attacks on SELF hitting for {@code damage}, praying the graphic's style or the other one. */
@@ -2522,8 +2513,8 @@ public class GraphicVsBehaviourCheckTest
 	{
 		for (int i = 0; i < count; i++)
 		{
-			Style style = Fights.alternating(i);
-			Fights.attack(kill, style, Actor.SELF, damage, prayGraphicStyle ? Fights.correct(style) : Fights.wrong(style));
+			Style style = CheckFights.alternating(i);
+			CheckFights.attack(kill, style, Actor.SELF, damage, prayGraphicStyle ? CheckFights.correct(style) : CheckFights.wrong(style));
 		}
 		return kill;
 	}
@@ -2531,60 +2522,60 @@ public class GraphicVsBehaviourCheckTest
 	@Test
 	public void aHealthyKillPasses()
 	{
-		assertEquals(CheckResult.pass(), run(Fights.healthySolo()));
+		assertEquals(CheckResult.pass(), run(CheckFights.healthySolo()));
 	}
 
 	@Test
 	public void realPrayerMistakesAreNotContradictions()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
-		Fights.blockedAttacks(kill, 7);
+		KillLogBuilder kill = CheckFights.soloUntilP3();
+		CheckFights.blockedAttacks(kill, 7);
 		attacks(kill, 5, 20, false);
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.YAMA_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.YAMA_DIED)));
 	}
 
 	@Test
 	public void swappedGraphicsFail()
 	{
-		KillLogBuilder kill = attacks(Fights.soloUntilP3(), 12, 20, true);
+		KillLogBuilder kill = attacks(CheckFights.soloUntilP3(), 12, 20, true);
 
-		CheckResult result = run(Fights.finish(kill, EndReason.YAMA_DIED));
+		CheckResult result = run(CheckFights.finish(kill, EndReason.YAMA_DIED));
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("12 of 12"));
-		assertEquals(OptionalInt.of(Fights.P3_START), result.tick());
+		assertEquals(OptionalInt.of(CheckFights.P3_START), result.tick());
 	}
 
 	@Test
 	public void fewerThanThreeContradictionsPass()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
+		KillLogBuilder kill = CheckFights.soloUntilP3();
 		attacks(kill, 2, 20, true);
 		attacks(kill, 4, 20, false);
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.YAMA_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.YAMA_DIED)));
 	}
 
 	@Test
 	public void threeContradictionsAmongManyPass()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
+		KillLogBuilder kill = CheckFights.soloUntilP3();
 		attacks(kill, 3, 20, true);
 		attacks(kill, 17, 20, false);
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.YAMA_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.YAMA_DIED)));
 	}
 
 	@Test
 	public void threeOfEightFail()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
+		KillLogBuilder kill = CheckFights.soloUntilP3();
 		attacks(kill, 3, 20, true);
 		attacks(kill, 5, 20, false);
-		Fights.blockedAttacks(kill, 4);
+		CheckFights.blockedAttacks(kill, 4);
 
-		CheckResult result = run(Fights.finish(kill, EndReason.YAMA_DIED));
+		CheckResult result = run(CheckFights.finish(kill, EndReason.YAMA_DIED));
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("3 of 8"));
@@ -2593,16 +2584,16 @@ public class GraphicVsBehaviourCheckTest
 	@Test
 	public void evidenceFromEveryPhaseCounts()
 	{
-		KillLogBuilder kill = Fights.solo();
+		KillLogBuilder kill = CheckFights.solo();
 		for (int i = 0; i < 3; i++)
 		{
-			Style style = Fights.alternating(i);
-			Fights.attack(kill, style, Actor.SELF, 20, Fights.correct(style)).ticks(1);
+			Style style = CheckFights.alternating(i);
+			CheckFights.attack(kill, style, Actor.SELF, 20, CheckFights.correct(style)).ticks(1);
 		}
-		Fights.untilP3(kill);
+		CheckFights.untilP3(kill);
 		attacks(kill, 5, 20, false);
 
-		CheckResult result = run(Fights.finish(kill, EndReason.YAMA_DIED));
+		CheckResult result = run(CheckFights.finish(kill, EndReason.YAMA_DIED));
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("3 of 8"));
@@ -2835,8 +2826,8 @@ git commit -m "feat: add the BlockedDamage and GraphicVsBehaviour health checks"
 - Test: `src/test/java/com/yamareviewer/domain/health/CrashSetsCheckTest.java`, `SpecsMatchedCheckTest.java`, `HealthChecksTest.java`
 
 **Interfaces:**
-- Consumes: `Sections.CRASHES`, `CrashSummary.getLines()`, `CrashLine.getTick()`, `CrashLine.getPlayer()` (Part 3, assumed field 3); `SpecEnergyDrops`, `SpecDrop` (Task 2); `Rules.getCrashSetGap()`; `ContractRules.getP3CrashSets()`.
-- Produces: `CrashSetsCheck` (name "CrashSets"; hides CRASHES; roles CRASH_FIREBALL, CRASH_IMPACT; constant `LINES_PER_PLAYER = 3`); `SpecsMatchedCheck` (name "SpecsMatched"; hides SPECS; roles `SpecEnergyDrops.SPEC_ROLES`); `HealthChecks.standard()` returning the eight checks in spec-table order.
+- Consumes: `Sections.CRASHES`, `CrashSummary.getLines()`, `CrashLine.getTick()`, `CrashLine.getPlayer()`; `Sections.SPECS`, `SpecSummary.ownSpecs()`, `SpecResult.getWeapon()` (a `SpecWeapon`, null for an OTHER_WEAPON spec), `isAnimationSeen()`, `getTick()`, `getEnergyUsed()` (Part 3); `SpecEnergyDrops.SPEC_ROLES` (Task 2); `Rules.getCrashSetGap()`; `ContractRules.getP3CrashSets()`.
+- Produces: `CrashSetsCheck` (name "CrashSets"; hides CRASHES; roles CRASH_FIREBALL, CRASH_IMPACT; constant `LINES_PER_PLAYER = 3`); `SpecsMatchedCheck` (name "SpecsMatched"; hides SPECS; roles `SpecEnergyDrops.SPEC_ROLES`; reads Part 3's own `SpecResult`s: an unmatched drop is `weapon != null && !animationSeen`); `HealthChecks.standard()` returning the eight checks in spec-table order.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2854,7 +2845,7 @@ import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.projection.ProjectionContext;
 import com.yamareviewer.domain.projection.ReviewSettings;
 import com.yamareviewer.domain.projection.Sections;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.KillLogBuilder;
 import com.yamareviewer.testing.TestIds;
 import java.util.List;
@@ -2871,27 +2862,27 @@ public class CrashSetsCheckTest
 
 	private CheckResult run(KillLog log)
 	{
-		return check.check(log, Fights.context(log));
+		return check.check(log, CheckFights.context(log));
 	}
 
 	/** Two lines two ticks apart, then idle: an incomplete set that takes one attack cycle. */
 	private static KillLogBuilder twoLineSet(KillLogBuilder kill, int x, int y)
 	{
-		Fights.crashLine(kill, x, y).ticks(2);
-		Fights.crashLine(kill, x, y).ticks(Fights.CYCLE - 2);
+		CheckFights.crashLine(kill, x, y).ticks(2);
+		CheckFights.crashLine(kill, x, y).ticks(CheckFights.CYCLE - 2);
 		return kill;
 	}
 
 	@Test
 	public void completeSetsPass()
 	{
-		assertEquals(CheckResult.pass(), run(Fights.healthySolo()));
+		assertEquals(CheckResult.pass(), run(CheckFights.healthySolo()));
 	}
 
 	@Test
 	public void noCrashLinesIsNoEvidence()
 	{
-		KillLog log = Fights.finish(Fights.blockedAttacks(Fights.soloUntilP3(), 8), EndReason.YAMA_DIED);
+		KillLog log = CheckFights.finish(CheckFights.blockedAttacks(CheckFights.soloUntilP3(), 8), EndReason.YAMA_DIED);
 
 		assertEquals(CheckResult.pass(), run(log));
 	}
@@ -2899,49 +2890,49 @@ public class CrashSetsCheckTest
 	@Test
 	public void anIncompleteSetFails()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
-		Fights.blockedAttacks(kill, 3);
-		twoLineSet(kill, Fights.SELF_X, Fights.SELF_Y);
-		Fights.blockedAttacks(kill, 3);
-		Fights.crashSet(kill, Fights.SELF_X, Fights.SELF_Y);
-		Fights.blockedAttacks(kill, 3);
+		KillLogBuilder kill = CheckFights.soloUntilP3();
+		CheckFights.blockedAttacks(kill, 3);
+		twoLineSet(kill, CheckFights.SELF_X, CheckFights.SELF_Y);
+		CheckFights.blockedAttacks(kill, 3);
+		CheckFights.crashSet(kill, CheckFights.SELF_X, CheckFights.SELF_Y);
+		CheckFights.blockedAttacks(kill, 3);
 
-		CheckResult result = run(Fights.finish(kill, EndReason.YAMA_DIED));
+		CheckResult result = run(CheckFights.finish(kill, EndReason.YAMA_DIED));
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("2 lines for SELF"));
 		assertTrue(result.detail(), result.detail().contains("expects 3 sets in P3"));
-		assertEquals(OptionalInt.of(Fights.P3_START + 3 * Fights.CYCLE), result.tick());
+		assertEquals(OptionalInt.of(CheckFights.P3_START + 3 * CheckFights.CYCLE), result.tick());
 	}
 
 	@Test
 	public void theLastSetMayBeIncomplete()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
-		Fights.blockedAttacks(kill, 3);
-		Fights.crashSet(kill, Fights.SELF_X, Fights.SELF_Y);
-		Fights.blockedAttacks(kill, 3);
-		twoLineSet(kill, Fights.SELF_X, Fights.SELF_Y);
-		Fights.blockedAttacks(kill, 3);
+		KillLogBuilder kill = CheckFights.soloUntilP3();
+		CheckFights.blockedAttacks(kill, 3);
+		CheckFights.crashSet(kill, CheckFights.SELF_X, CheckFights.SELF_Y);
+		CheckFights.blockedAttacks(kill, 3);
+		twoLineSet(kill, CheckFights.SELF_X, CheckFights.SELF_Y);
+		CheckFights.blockedAttacks(kill, 3);
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.YAMA_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.YAMA_DIED)));
 	}
 
 	@Test
 	public void aSetWithTooManyLinesFails()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
-		Fights.blockedAttacks(kill, 3);
+		KillLogBuilder kill = CheckFights.soloUntilP3();
+		CheckFights.blockedAttacks(kill, 3);
 		for (int line = 0; line < 4; line++)
 		{
-			Fights.crashLine(kill, Fights.SELF_X, Fights.SELF_Y).ticks(2);
+			CheckFights.crashLine(kill, CheckFights.SELF_X, CheckFights.SELF_Y).ticks(2);
 		}
-		kill.ticks(Fights.CYCLE - 1);
-		Fights.blockedAttacks(kill, 3);
-		Fights.crashSet(kill, Fights.SELF_X, Fights.SELF_Y);
-		Fights.blockedAttacks(kill, 3);
+		kill.ticks(CheckFights.CYCLE - 1);
+		CheckFights.blockedAttacks(kill, 3);
+		CheckFights.crashSet(kill, CheckFights.SELF_X, CheckFights.SELF_Y);
+		CheckFights.blockedAttacks(kill, 3);
 
-		CheckResult result = run(Fights.finish(kill, EndReason.YAMA_DIED));
+		CheckResult result = run(CheckFights.finish(kill, EndReason.YAMA_DIED));
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("4 lines for SELF"));
@@ -2951,30 +2942,30 @@ public class CrashSetsCheckTest
 	public void linesAreCountedPerPlayer()
 	{
 		// Relies on Part 3 giving each line to the player nearest its centre fireball (spec 6.6).
-		KillLogBuilder kill = Fights.duoUntilP3();
-		Fights.blockedAttacks(kill, 3);
+		KillLogBuilder kill = CheckFights.duoUntilP3();
+		CheckFights.blockedAttacks(kill, 3);
 		for (int line = 0; line < 3; line++)
 		{
-			Fights.crashLine(kill, Fights.SELF_X, Fights.SELF_Y);
-			Fights.crashLine(kill, Fights.PARTNER_X, Fights.PARTNER_Y).ticks(2);
+			CheckFights.crashLine(kill, CheckFights.SELF_X, CheckFights.SELF_Y);
+			CheckFights.crashLine(kill, CheckFights.PARTNER_X, CheckFights.PARTNER_Y).ticks(2);
 		}
 		kill.ticks(1);
-		Fights.blockedAttacks(kill, 3);
+		CheckFights.blockedAttacks(kill, 3);
 		for (int line = 0; line < 3; line++)
 		{
-			Fights.crashLine(kill, Fights.SELF_X, Fights.SELF_Y);
+			CheckFights.crashLine(kill, CheckFights.SELF_X, CheckFights.SELF_Y);
 			if (line < 2)
 			{
-				Fights.crashLine(kill, Fights.PARTNER_X, Fights.PARTNER_Y);
+				CheckFights.crashLine(kill, CheckFights.PARTNER_X, CheckFights.PARTNER_Y);
 			}
 			kill.ticks(2);
 		}
 		kill.ticks(1);
-		Fights.blockedAttacks(kill, 3);
-		Fights.crashSet(kill, Fights.SELF_X, Fights.SELF_Y);
-		Fights.blockedAttacks(kill, 3);
+		CheckFights.blockedAttacks(kill, 3);
+		CheckFights.crashSet(kill, CheckFights.SELF_X, CheckFights.SELF_Y);
+		CheckFights.blockedAttacks(kill, 3);
 
-		CheckResult result = run(Fights.finish(kill, EndReason.YAMA_DIED));
+		CheckResult result = run(CheckFights.finish(kill, EndReason.YAMA_DIED));
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("2 lines for PARTNER"));
@@ -2985,7 +2976,7 @@ public class CrashSetsCheckTest
 	{
 		ProjectionContext context = new ProjectionContext(TestIds.registry(), Rules.DEFAULT, ReviewSettings.DEFAULT);
 
-		assertTrue(check.check(Fights.solo().build(), context).skipped());
+		assertTrue(check.check(CheckFights.solo().build(), context).skipped());
 		for (Contract contract : Contract.values())
 		{
 			assertTrue(contract.name(), check.applies(ContractRules.of(contract, Rules.DEFAULT)));
@@ -3010,8 +3001,9 @@ import com.yamareviewer.domain.ids.Rules;
 import com.yamareviewer.domain.model.Contract;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.projection.Sections;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.KillLogBuilder;
+import com.yamareviewer.testing.TestContext;
 import com.yamareviewer.testing.TestIds;
 import java.util.List;
 import java.util.OptionalInt;
@@ -3028,62 +3020,68 @@ public class SpecsMatchedCheckTest
 
 	private CheckResult run(KillLog log)
 	{
-		return check.check(log, Fights.context(log));
+		return check.check(log, CheckFights.context(log));
 	}
 
 	@Test
 	public void matchedSpecsPass()
 	{
-		assertEquals(CheckResult.pass(), run(Fights.healthySolo()));
+		assertEquals(CheckResult.pass(), run(CheckFights.healthySolo()));
 	}
 
 	@Test
 	public void anEnergyDropWithoutAnimationFails()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
-		Fights.blockedAttacks(kill, 3);
-		kill.weapon(EMBERLIGHT).spec(100).endTick().spec(75).ticks(Fights.CYCLE - 1);
-		Fights.blockedAttacks(kill, 3);
+		KillLogBuilder kill = CheckFights.soloUntilP3();
+		CheckFights.blockedAttacks(kill, 3);
+		kill.weapon(EMBERLIGHT).spec(100).endTick().spec(75).ticks(CheckFights.CYCLE - 1);
+		CheckFights.blockedAttacks(kill, 3);
 
-		CheckResult result = run(Fights.finish(kill, EndReason.YAMA_DIED));
+		CheckResult result = run(CheckFights.finish(kill, EndReason.YAMA_DIED));
 
 		assertFalse(result.passed());
 		assertTrue(result.detail(), result.detail().contains("WEAPON_EMBERLIGHT"));
-		assertTrue(result.detail(), result.detail().contains("100% -> 75%"));
-		assertEquals(OptionalInt.of(Fights.P3_START + 3 * Fights.CYCLE + 1), result.tick());
+		assertTrue(result.detail(), result.detail().contains("25%"));
+		assertEquals(OptionalInt.of(CheckFights.P3_START + 3 * CheckFights.CYCLE + 1), result.tick());
 	}
 
 	@Test
 	public void otherWeaponSpecsAreNotChecked()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
-		Fights.blockedAttacks(kill, 3);
-		kill.weapon(4151).spec(100).endTick().spec(75).ticks(Fights.CYCLE - 1);
-		Fights.blockedAttacks(kill, 3);
+		KillLogBuilder kill = CheckFights.soloUntilP3();
+		CheckFights.blockedAttacks(kill, 3);
+		kill.weapon(4151).spec(100).endTick().spec(75).ticks(CheckFights.CYCLE - 1);
+		CheckFights.blockedAttacks(kill, 3);
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.YAMA_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.YAMA_DIED)));
 	}
 
 	@Test
 	public void theAnimationMayComeOneTickEarlier()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
-		Fights.blockedAttacks(kill, 3);
-		kill.weapon(EMBERLIGHT).spec(100).animates(Actor.SELF, TestIds.id(Role.SPEC_EMBERLIGHT)).endTick().spec(75).ticks(Fights.CYCLE - 1);
-		Fights.blockedAttacks(kill, 3);
+		KillLogBuilder kill = CheckFights.soloUntilP3();
+		CheckFights.blockedAttacks(kill, 3);
+		kill.weapon(EMBERLIGHT).spec(100).animates(Actor.SELF, TestIds.id(Role.SPEC_EMBERLIGHT)).endTick().spec(75).ticks(CheckFights.CYCLE - 1);
+		CheckFights.blockedAttacks(kill, 3);
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.YAMA_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.YAMA_DIED)));
 	}
 
 	@Test
 	public void noWeaponIsNotChecked()
 	{
-		KillLogBuilder kill = Fights.soloUntilP3();
-		Fights.blockedAttacks(kill, 3);
-		kill.weapon(-1).spec(100).endTick().spec(75).ticks(Fights.CYCLE - 1);
-		Fights.blockedAttacks(kill, 3);
+		KillLogBuilder kill = CheckFights.soloUntilP3();
+		CheckFights.blockedAttacks(kill, 3);
+		kill.weapon(-1).spec(100).endTick().spec(75).ticks(CheckFights.CYCLE - 1);
+		CheckFights.blockedAttacks(kill, 3);
 
-		assertEquals(CheckResult.pass(), run(Fights.finish(kill, EndReason.YAMA_DIED)));
+		assertEquals(CheckResult.pass(), run(CheckFights.finish(kill, EndReason.YAMA_DIED)));
+	}
+
+	@Test
+	public void skippedWhenSpecsAreNotAvailable()
+	{
+		assertTrue(check.check(CheckFights.solo().build(), TestContext.empty()).skipped());
 	}
 
 	@Test
@@ -3111,7 +3109,7 @@ import com.yamareviewer.domain.model.Contract;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.projection.ProjectionContext;
 import com.yamareviewer.domain.projection.Sections;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.KillLogBuilder;
 import com.yamareviewer.testing.TestIds;
 import java.util.List;
@@ -3139,8 +3137,8 @@ public class HealthChecksTest
 	@Test
 	public void everyStandardCheckRunsAndPassesOnAHealthyKill()
 	{
-		KillLog log = Fights.healthySolo();
-		ProjectionContext context = Fights.context(log);
+		KillLog log = CheckFights.healthySolo();
+		ProjectionContext context = CheckFights.context(log);
 
 		List<CheckOutcome> outcomes = HealthCheckRunner.apply(log, context, HealthChecks.standard());
 
@@ -3152,11 +3150,11 @@ public class HealthChecksTest
 	@Test
 	public void contractChecksAreSkippedUnderSensoryClouding()
 	{
-		KillLogBuilder kill = Fights.solo().widgetText(TestIds.id(Role.CONTRACT_NAME_WIDGET), "Contract of Sensory Clouding");
-		Fights.untilP3(kill);
-		Fights.blockedAttacks(kill, 20);
-		KillLog log = Fights.finish(kill, EndReason.YAMA_DIED);
-		ProjectionContext context = Fights.context(log);
+		KillLogBuilder kill = CheckFights.solo().widgetText(TestIds.id(Role.CONTRACT_NAME_WIDGET), "Contract of Sensory Clouding");
+		CheckFights.untilP3(kill);
+		CheckFights.blockedAttacks(kill, 20);
+		KillLog log = CheckFights.finish(kill, EndReason.YAMA_DIED);
+		ProjectionContext context = CheckFights.context(log);
 		assertEquals(Optional.of(Contract.SENSORY_CLOUDING), context.value(Sections.CONTRACT));
 
 		List<CheckOutcome> outcomes = HealthCheckRunner.apply(log, context, HealthChecks.standard());
@@ -3303,11 +3301,18 @@ import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.projection.ProjectionContext;
 import com.yamareviewer.domain.projection.SectionKey;
 import com.yamareviewer.domain.projection.Sections;
+import com.yamareviewer.domain.review.SpecResult;
+import com.yamareviewer.domain.review.SpecSummary;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-/** Spec 8: a spec-energy drop while a known spec weapon is wielded must have a SPEC_* animation on SELF (spec 6.9). */
+/**
+ * Spec 8: a spec-energy drop while a known spec weapon is wielded must have a SPEC_* animation on SELF
+ * (spec 6.9). Part 3's SpecsProjection already pairs drops with animations: an own SpecResult with a weapon
+ * but no animation seen is the failure.
+ */
 public final class SpecsMatchedCheck implements HealthCheck
 {
 	@Override
@@ -3337,17 +3342,24 @@ public final class SpecsMatchedCheck implements HealthCheck
 	@Override
 	public CheckResult check(KillLog log, ProjectionContext context)
 	{
-		List<SpecDrop> drops = SpecEnergyDrops.find(log, context.ids());
-		List<SpecDrop> unmatched = drops.stream().filter(SpecDrop::unmatchedKnownWeapon).collect(Collectors.toList());
+		Optional<SpecSummary> specs = context.value(Sections.SPECS);
+		if (specs.isEmpty())
+		{
+			return CheckResult.skipped("specs not available");
+		}
+		List<SpecResult> own = specs.get().ownSpecs();
+		List<SpecResult> unmatched = own.stream()
+			.filter(spec -> spec.getWeapon() != null && !spec.isAnimationSeen())
+			.collect(Collectors.toList());
 		if (unmatched.isEmpty())
 		{
 			return CheckResult.pass();
 		}
-		SpecDrop first = unmatched.get(0);
+		SpecResult first = unmatched.get(0);
 		return CheckResult.fail(String.format(
-			"spec energy dropped %d%% -> %d%% at tick %d with %s (item %d) wielded, but no SPEC_* animation played on SELF at tick %d or %d (%d of %d drops unmatched)",
-			first.getEnergyBefore(), first.getEnergyAfter(), first.getTick(), first.getWeaponRole(), first.getWeaponId(),
-			first.getTick() - 1, first.getTick(), unmatched.size(), drops.size()), first.getTick());
+			"spec energy dropped by %d%% at tick %d with %s (%s) wielded, but no SPEC_* animation played on SELF at tick %d or %d (%d of %d own specs unmatched)",
+			first.getEnergyUsed(), first.getTick(), first.getWeapon().weaponRole(), first.getWeapon().displayName(),
+			first.getTick() - 1, first.getTick(), unmatched.size(), own.size()), first.getTick());
 	}
 }
 ```
@@ -3416,7 +3428,7 @@ import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.event.EndReason;
 import com.yamareviewer.domain.ids.Role;
 import com.yamareviewer.domain.model.KillLog;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.KillLogBuilder;
 import com.yamareviewer.testing.TestIds;
 import java.util.List;
@@ -3470,7 +3482,7 @@ public class CandidateFinderTest
 	@Test
 	public void knownIdsAreNeverCandidates()
 	{
-		assertEquals(List.of(), find(Fights.healthySolo(), Set.of(Role.YAMA_STANDARD_ATTACK, Role.YAMA_CAST_MAGIC, Role.IMPACT_MAGIC,
+		assertEquals(List.of(), find(CheckFights.healthySolo(), Set.of(Role.YAMA_STANDARD_ATTACK, Role.YAMA_CAST_MAGIC, Role.IMPACT_MAGIC,
 			Role.CRASH_FIREBALL, Role.SPEC_EMBERLIGHT, Role.JUDGE)));
 	}
 
@@ -4080,7 +4092,7 @@ import com.yamareviewer.domain.ids.Role;
 import com.yamareviewer.domain.model.Contract;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.model.Mode;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.KillLogBuilder;
 import java.util.List;
 import java.util.Set;
@@ -4109,7 +4121,7 @@ public class ReportWriterTest
 	@Test
 	public void listsVersionsTheKillChecksCandidatesAndAnExcerpt()
 	{
-		KillLog log = Fights.solo().ticks(50).supplies(SnapshotKind.END).end(EndReason.YAMA_DIED);
+		KillLog log = CheckFights.solo().ticks(50).supplies(SnapshotKind.END).end(EndReason.YAMA_DIED);
 
 		String report = ReportWriter.write(failedPhaseOrder(log));
 
@@ -4134,7 +4146,7 @@ public class ReportWriterTest
 	@Test
 	public void theExcerptHasAtMost200EventsAroundTheFirstFailure()
 	{
-		KillLog log = Fights.solo().ticks(300).end(EndReason.YAMA_DIED);
+		KillLog log = CheckFights.solo().ticks(300).end(EndReason.YAMA_DIED);
 		ProblemReport report = ProblemReport.forFailedChecks(VERSIONS, log, null, null,
 			List.of(new CheckOutcome(new PhaseOrderCheck(), CheckResult.fail("x", 150))), List.of());
 
@@ -4150,7 +4162,7 @@ public class ReportWriterTest
 	@Test
 	public void neverContainsPlayerNames()
 	{
-		KillLogBuilder kill = Fights.solo().playerSeen("Zezima")
+		KillLogBuilder kill = CheckFights.solo().playerSeen("Zezima")
 			.event(new HitsplatObserved(0, Actor.other("Stranger"), HitsplatKind.DAMAGE, 4, 1, false))
 			.ticks(2)
 			.event(new PlayerLeft(2, "Zezima"));
@@ -4179,7 +4191,7 @@ public class ReportWriterTest
 	@Test
 	public void summaryStopsBeforeTheEvents()
 	{
-		String report = ReportWriter.write(failedPhaseOrder(Fights.solo().ticks(50).end(EndReason.YAMA_DIED)));
+		String report = ReportWriter.write(failedPhaseOrder(CheckFights.solo().ticks(50).end(EndReason.YAMA_DIED)));
 
 		String summary = ReportWriter.summary(report);
 
@@ -5020,7 +5032,7 @@ import com.yamareviewer.domain.health.P3AttackCountCheck;
 import com.yamareviewer.domain.health.PhaseOrderCheck;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.projection.ProjectionContext;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.TestIds;
 import java.io.IOException;
 import java.time.Clock;
@@ -5044,8 +5056,8 @@ public class ProblemReporterTest
 	@Test
 	public void writesATimestampedReportWithCandidatesForEachFailedCheck()
 	{
-		KillLog kill = Fights.healthySolo();
-		ProjectionContext context = Fights.context(kill);
+		KillLog kill = CheckFights.healthySolo();
+		ProjectionContext context = CheckFights.context(kill);
 		List<CheckOutcome> outcomes = List.of(
 			new CheckOutcome(new PhaseOrderCheck(), CheckResult.fail("phases seen: P1", 40)),
 			new CheckOutcome(new P3AttackCountCheck(), CheckResult.pass()));
@@ -5081,7 +5093,7 @@ public class ProblemReporterTest
 		reports.fail = true;
 
 		assertEquals(Optional.empty(), reporter.reportUnknownYama(14999));
-		assertEquals(Optional.empty(), reporter.reportFailedChecks(Fights.healthySolo(), Fights.context(Fights.healthySolo()),
+		assertEquals(Optional.empty(), reporter.reportFailedChecks(CheckFights.healthySolo(), CheckFights.context(CheckFights.healthySolo()),
 			List.of(new CheckOutcome(new PhaseOrderCheck(), CheckResult.fail("x")))));
 	}
 
@@ -5412,7 +5424,7 @@ import com.yamareviewer.domain.projection.Sections;
 import com.yamareviewer.domain.review.HiddenReason;
 import com.yamareviewer.domain.review.KillReview;
 import com.yamareviewer.domain.review.ReviewStatus;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import com.yamareviewer.testing.KillLogBuilder;
 import com.yamareviewer.testing.TestIds;
 import java.io.IOException;
@@ -5458,7 +5470,7 @@ public class KillEndedHandlerChecksTest
 	@Test
 	public void aHealthyKillIsCompleteAndWritesNoReport()
 	{
-		handler(HealthChecks.standard()).handle(Fights.healthySolo());
+		handler(HealthChecks.standard()).handle(CheckFights.healthySolo());
 
 		KillReview review = publisher.published.get(0);
 		assertEquals(ReviewStatus.COMPLETE, review.getStatus());
@@ -5470,7 +5482,7 @@ public class KillEndedHandlerChecksTest
 	@Test
 	public void aFailedCheckHidesItsSectionsNamesItselfAndWritesAReport()
 	{
-		handler(List.of(new AlwaysFailing())).handle(Fights.healthySolo());
+		handler(List.of(new AlwaysFailing())).handle(CheckFights.healthySolo());
 
 		KillReview review = publisher.published.get(0);
 		assertEquals(Optional.of(HiddenReason.HEALTH_CHECK_FAILED), review.getPhases().hiddenReason());
@@ -5486,10 +5498,10 @@ public class KillEndedHandlerChecksTest
 	@Test
 	public void anEarlyDeathWritesNoReport()
 	{
-		KillLogBuilder kill = Fights.solo().ticks(40);
-		Fights.judgePhase(kill).ticks(10);
+		KillLogBuilder kill = CheckFights.solo().ticks(40);
+		CheckFights.judgePhase(kill).ticks(10);
 
-		handler(HealthChecks.standard()).handle(Fights.finish(kill, EndReason.PLAYER_DIED));
+		handler(HealthChecks.standard()).handle(CheckFights.finish(kill, EndReason.PLAYER_DIED));
 
 		assertEquals(List.of(), publisher.published.get(0).getFailedChecks());
 		assertEquals(ReviewStatus.COMPLETE, publisher.published.get(0).getStatus());
@@ -5501,7 +5513,7 @@ public class KillEndedHandlerChecksTest
 	{
 		reports.fail = true;
 
-		handler(List.of(new AlwaysFailing())).handle(Fights.healthySolo());
+		handler(List.of(new AlwaysFailing())).handle(CheckFights.healthySolo());
 
 		assertEquals(1, publisher.published.size());
 		assertEquals(ReviewStatus.INCOMPLETE, publisher.published.get(0).getStatus());
@@ -5629,7 +5641,7 @@ package com.yamareviewer.domain.text;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.projection.KillReviewAssembler;
 import com.yamareviewer.domain.review.KillReview;
-import com.yamareviewer.testing.Fights;
+import com.yamareviewer.testing.CheckFights;
 import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
@@ -5641,8 +5653,8 @@ public class ReviewFormatterFailedChecksTest
 {
 	private static KillReview review(List<String> failedChecks)
 	{
-		KillLog log = Fights.healthySolo();
-		return KillReviewAssembler.assemble(log, Fights.context(log)).toBuilder().failedChecks(failedChecks).build();
+		KillLog log = CheckFights.healthySolo();
+		return KillReviewAssembler.assemble(log, CheckFights.context(log)).toBuilder().failedChecks(failedChecks).build();
 	}
 
 	@Test
@@ -5873,24 +5885,29 @@ In `src/test/java/com/yamareviewer/application/handler/KillEndedHandlerTest.java
 
 Add the imports `com.yamareviewer.application.port.ReportRepository`, `com.yamareviewer.domain.diagnosis.Versions`, `com.yamareviewer.testing.TestIds`, `java.time.Clock`, `java.util.List`, `java.util.Optional` where they are missing.
 
-In `src/test/java/com/yamareviewer/tools/Replay.java` (Part 2), directly after the line that calls `builder.run(...)` (assumed field 9) insert:
+In `src/test/java/com/yamareviewer/tools/Replay.java` (Part 3, Task 16) add this method next to `review(KillLog)`:
 
 ```java
-		List<CheckOutcome> outcomes = HealthCheckRunner.apply(log, context, HealthChecks.standard());
+	/** The health checks on the context the plugin would use; the review of review(log) is left as it is. */
+	public static List<CheckOutcome> checks(KillLog log)
+	{
+		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), BuiltInIds.registry(), Rules.DEFAULT);
+		return HealthCheckRunner.apply(log, builder.run(log, ReviewSettings.DEFAULT), HealthChecks.standard());
+	}
 ```
 
-and after the review is printed, print the outcomes:
+and in `main`, after `print(ReviewFormatter.format(review));`, insert:
 
 ```java
 		System.out.println();
-		System.out.println("Health checks");
-		for (CheckOutcome outcome : outcomes)
+		System.out.println("== Health checks");
+		for (CheckOutcome outcome : checks(RawLogs.read(Path.of(args[0]))))
 		{
 			System.out.println("  " + outcome.name() + ": " + outcome.getResult());
 		}
 ```
 
-with the imports `com.yamareviewer.domain.health.CheckOutcome`, `com.yamareviewer.domain.health.HealthCheckRunner`, `com.yamareviewer.domain.health.HealthChecks`. The review `Replay` assembles is unchanged, so the Part 3 golden fixtures are unaffected.
+with the imports `com.yamareviewer.domain.health.CheckOutcome`, `com.yamareviewer.domain.health.HealthCheckRunner`, `com.yamareviewer.domain.health.HealthChecks` and `java.util.List`. `Replay.review(log)` and `Replay.json` are unchanged, so the golden fixtures of Part 3 Task 16 compare the same review as before. Note that `Replay.GSON` serialises nulls: a fixture generated before this task lacks the `failedChecks` key, one generated after it holds `"failedChecks": null`, so generate (or regenerate) the fixtures after this task.
 
 - [ ] **Step 6: Show the failed checks in `ReviewFormatter`**
 
@@ -6448,7 +6465,7 @@ public class ReportProblemFooter extends JPanel
 
 - [ ] **Step 4: Put the footer into `ReviewPanel`**
 
-In `src/main/java/com/yamareviewer/adapter/ui/ReviewPanel.java` (Part 2). Part 2 reserved a footer container (assumed field 7); the code below calls it `footerSlot`: use the name Part 2 chose (`grep -n footer src/main/java/com/yamareviewer/adapter/ui/ReviewPanel.java` shows it). If Part 2 reserved no container, add the field `private final JPanel footerSlot = new JPanel(new BorderLayout());` with `footerSlot.setBackground(ColorScheme.DARK_GRAY_COLOR);` and add it last in the constructor: `add(footerSlot, BorderLayout.SOUTH)` when the panel's layout is a `BorderLayout`, plain `add(footerSlot)` when it is the `PluginPanel` default `DynamicGridLayout`.
+In `src/main/java/com/yamareviewer/adapter/ui/ReviewPanel.java` (Part 2). Part 2 reserved a footer container (assumption 4 at the top); the code below calls it `footerSlot`: use the name Part 2 chose (`grep -n footer src/main/java/com/yamareviewer/adapter/ui/ReviewPanel.java` shows it). If Part 2 reserved no container, add the field `private final JPanel footerSlot = new JPanel(new BorderLayout());` with `footerSlot.setBackground(ColorScheme.DARK_GRAY_COLOR);` and add it last in the constructor: `add(footerSlot, BorderLayout.SOUTH)` when the panel's layout is a `BorderLayout`, plain `add(footerSlot)` when it is the `PluginPanel` default `DynamicGridLayout`.
 
 Add the field:
 
@@ -6512,7 +6529,7 @@ Add the field:
 	private ProblemReporter reporter;
 ```
 
-In `startUp`, after the `FileStore` local (`files`, assumed field 8; if Part 2 still constructs `new FilepathFileStore(getPluginDirectory())` inline, extract it into `FileStore files = new FilepathFileStore(getPluginDirectory());` first) and before the `KillEndedHandler` is built, add:
+In `startUp`, after the `FileStore` local (`files`, assumption 5 at the top; if Part 2 still constructs `new FilepathFileStore(getPluginDirectory())` inline, extract it into `FileStore files = new FilepathFileStore(getPluginDirectory());` first) and before the `KillEndedHandler` is built, add:
 
 ```java
 		ReportRepository reports = new FileReportRepository(files);
@@ -6588,8 +6605,8 @@ git commit -m "feat: add the Report a problem footer and wire checks, reports an
 
 **Spec coverage (spec 13, part 4):** the eight checks of section 8 with their evidence minimums, hidden sections, report roles and contract rules (Tasks 3–6, `applies` per 6.3.1); checks skipped for sections hidden as IDS_NOT_CAPTURED, NOT_APPLICABLE or CONTRACT, and failures hidden before assembly (Task 1); the review goes INCOMPLETE and a report is written (Task 10, `withRecomputedStatus`, `ProblemReporter`); candidate finding by pattern, changing nothing (Task 7); report contents, `reports/<timestamp>.txt` on the executor, actors never names (Tasks 8–9); the recording self-check of 5.3 with the NPC ids seen (Task 11); "Report a problem" copying the latest report and opening a prefilled issue with the summary under 6,000 characters through `LinkBrowser` (Task 12); rules 6 and 7 of section 2 (no network, no names: `ReportWriterTest.neverContainsPlayerNames`, `EventLineTest`); 4.5 and 11 failure isolation per unit (runner, reporter, handler, footer). Not in scope by the spec: overrides and automatic repair (v1.1).
 
-**Placeholders:** none. Where a Part 2 or Part 3 name is not in the brief the plan names its assumption in the list at the top and says which real name to substitute; every code step is complete.
+**Placeholders:** none. Part 3's real names are used throughout (its plan is complete); the six remaining Part 2 assumptions are listed at the top with what to substitute; every code step is complete.
 
-**Type consistency:** `CheckResult.pass()/fail(String)/fail(String, Integer)/skipped(String)` with `passed()/skipped()/detail()/tick()` are used identically in Tasks 1–12; `CheckOutcome(HealthCheck, CheckResult)` with `name()/failed()/skipped()/getCheck()/getResult()/failedNames/anyFailed` in Tasks 1, 8, 9, 10; `HealthCheckRunner.apply(KillLog, ProjectionContext, List<HealthCheck>)` in Tasks 1, 6, 10; `Fights` helpers in Tasks 2–10; `PrayedAttacks.onSelf(List<Attack>, KillLog, Rules, Phase)` in Tasks 2 and 5; `SpecEnergyDrops.find/SPEC_ROLES/WEAPON_ROLES` and `SpecDrop.unmatchedKnownWeapon()` in Tasks 2, 6, 7; `Candidate` field order `(role, id, text, where, count, firstTick, lastTick, score, evidence)` in Tasks 7 and 8; `ProblemReport.forFailedChecks(Versions, KillLog, Mode, Contract, List<CheckOutcome>, List<CheckCandidates>)` and `forUnknownYama(Versions, Set<Integer>, Set<Integer>)` in Tasks 8 and 9; `ReportRepository.save(String, String)/latest()` in Tasks 9, 10, 12; `ProblemReporter(ReportRepository, IdRegistry, Supplier<Versions>, Clock)` with `reportFailedChecks/reportUnknownYama` in Tasks 9, 10, 12; the eleven-argument `KillEndedHandler` in Tasks 10 and 12; the nine-argument `GameEventListener` in Tasks 11 and 12; `ReportProblemFooter(ExecutorService, ReportRepository, String)` with `refresh()` in Task 12.
+**Type consistency:** `CheckResult.pass()/fail(String)/fail(String, Integer)/skipped(String)` with `passed()/skipped()/detail()/tick()` are used identically in Tasks 1–12; `CheckOutcome(HealthCheck, CheckResult)` with `name()/failed()/skipped()/getCheck()/getResult()/failedNames/anyFailed` in Tasks 1, 8, 9, 10; `HealthCheckRunner.apply(KillLog, ProjectionContext, List<HealthCheck>)` in Tasks 1, 6, 10; `CheckFights` helpers in Tasks 2–10; `PrayedAttacks.onSelf(List<Attack>, KillLog, Rules, Phase)` in Tasks 2 and 5; `SpecEnergyDrops.find/SPEC_ROLES/WEAPON_ROLES` and `SpecDrop.unmatchedKnownWeapon()` in Tasks 2 and 7 (the check itself reads Part 3's `SpecResult`s in Task 6); `Candidate` field order `(role, id, text, where, count, firstTick, lastTick, score, evidence)` in Tasks 7 and 8; `ProblemReport.forFailedChecks(Versions, KillLog, Mode, Contract, List<CheckOutcome>, List<CheckCandidates>)` and `forUnknownYama(Versions, Set<Integer>, Set<Integer>)` in Tasks 8 and 9; `ReportRepository.save(String, String)/latest()` in Tasks 9, 10, 12; `ProblemReporter(ReportRepository, IdRegistry, Supplier<Versions>, Clock)` with `reportFailedChecks/reportUnknownYama` in Tasks 9, 10, 12; the eleven-argument `KillEndedHandler` in Tasks 10 and 12; the nine-argument `GameEventListener` in Tasks 11 and 12; `ReportProblemFooter(ExecutorService, ReportRepository, String)` with `refresh()` in Task 12.
 
 **Review Focus:** each of the five lines is pinned by a named test in its owning task (Tasks 5, 4, 3/4/10, 6 and 11).

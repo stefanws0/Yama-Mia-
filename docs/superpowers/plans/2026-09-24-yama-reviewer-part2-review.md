@@ -6539,7 +6539,7 @@ public class ChatLinesTest
 			"Yama (duo host, Bloodied Blows) 4:12. P1 1:05, P2 1:10, P3 1:24.",
 			"P3 prayers n/a. Crash lines n/a. Waves n/a.",
 			"Flares 5/6 killed. Damage taken 212 (partner 188).",
-			"Specs n/a. Supplies 318k."), ChatLines.lines(review, ALL));
+			"Specs: n/a. Supplies 318k."), ChatLines.lines(review, ALL));
 	}
 
 	@Test
@@ -6564,7 +6564,7 @@ public class ChatLinesTest
 	{
 		KillReview review = Reviews.sample();
 
-		assertEquals(List.of("Specs n/a. Supplies 318k."), ChatLines.lines(review, new ChatLineOptions(false, false, false, true, false)));
+		assertEquals(List.of("Specs: n/a. Supplies 318k."), ChatLines.lines(review, new ChatLineOptions(false, false, false, true, false)));
 		assertEquals(List.of(), ChatLines.lines(review, new ChatLineOptions(false, false, false, false, true)));
 	}
 
@@ -6582,7 +6582,7 @@ public class ChatLinesTest
 			"Yama (solo) n/a.",
 			"P3 prayers n/a. Crash lines n/a. Waves n/a.",
 			"Flares n/a. Damage taken n/a.",
-			"Specs n/a. Supplies n/a."), ChatLines.lines(review, ALL));
+			"Specs: n/a. Supplies n/a."), ChatLines.lines(review, ALL));
 	}
 
 	@Test
@@ -6637,7 +6637,7 @@ public class ClipboardExportTest
 			"Yama (solo) died in P3 at 4:12. P1 1:05, P2 1:10, P3 1:24.",
 			"P3 prayers n/a. Crash lines n/a. Waves n/a.",
 			"Flares 5/6 killed. Damage taken 212.",
-			"Specs n/a. Supplies 318k.",
+			"Specs: n/a. Supplies 318k.",
 			"",
 			"Supplies",
 			"Shark x2: 1,600",
@@ -7254,11 +7254,11 @@ public final class ChatLines
 		return "Flares " + flares + ". Damage taken " + damage + ".";
 	}
 
-	/** Part 3 fills the specs; "Specs n/a. Supplies 318k." */
+	/** Part 3 fills the specs; "Specs: n/a. Supplies 318k." */
 	static String specLine(KillReview review)
 	{
 		String supplies = review.getSupplies().asOptional().map(summary -> Formats.compactGp(summary.getTotalCost())).orElse(NOT_AVAILABLE);
-		return "Specs " + NOT_AVAILABLE + ". Supplies " + supplies + ".";
+		return "Specs: " + NOT_AVAILABLE + ". Supplies " + supplies + ".";
 	}
 
 	private static String damageTaken(DamageSummary damage, Mode mode)
@@ -9740,7 +9740,7 @@ Run `./gradlew run`, log in following https://github.com/runelite/runelite/wiki/
 Check:
 1. The sidebar shows the orange "Y" button; the panel has the tabs Last kill, Solo, Duo host, Duo joiner and says "No kill reviewed yet".
 2. Do a solo kill. During the fight nothing appears in chat or in the panel (open it and watch: it must not change).
-3. When Yama dies, four chat lines appear (phase times, `P3 prayers n/a…`, flares and damage, `Specs n/a. Supplies …`) and the Last kill tab shows the review with a green "Complete" badge (or orange "Incomplete" with the hidden sections named).
+3. When Yama dies, four chat lines appear (phase times, `P3 prayers n/a…`, flares and damage, `Specs: n/a. Supplies …`) and the Last kill tab shows the review with a green "Complete" badge (or orange "Incomplete" with the hidden sections named).
 4. Copy puts the review text on the clipboard; paste it somewhere: no player names.
 5. The Solo tab lists the kill; selecting it shows its review below the list; the contract filter switches to an empty list for a contract.
 6. `~/.runelite/plugin-data/yama-reviewer/reviews/SOLO/` holds one `.json` file; `./gradlew replay --args="<the raw log>"` prints the same review.
