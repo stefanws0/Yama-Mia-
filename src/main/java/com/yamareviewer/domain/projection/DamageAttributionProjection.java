@@ -123,7 +123,8 @@ public final class DamageAttributionProjection implements Projection<DamageSumma
 		Optional<PhaseTimes> phases = context.value(Sections.PHASES);
 
 		List<SourceRule> rules = new ArrayList<>();
-		// Part 3: rule 1, STANDARD (the landing hitsplat of a standard attack), goes here.
+		P3DamageSources p3 = new P3DamageSources(context);
+		rules.add(p3::standard);
 		rules.add(hit -> lastAtOrBefore(meleeTicks, hit.getTick(), MELEE_WINDOW_TICKS).map(melee ->
 		{
 			TickState state = states.get(melee);
@@ -131,7 +132,7 @@ public final class DamageAttributionProjection implements Projection<DamageSumma
 			boolean splash = target != null && target.isPlayer() && !target.equals(hit.getTarget());
 			return splash ? DamageSource.MELEE_SPLASH : DamageSource.MELEE;
 		}));
-		// Part 3: rules 3 and 4, SHADOW_CRASH and SHADOW_WAVE, go here.
+		rules.add(p3::crashOrWave);
 		rules.add(hit -> within(flareHitTicks.getOrDefault(hit.getTarget(), List.of()), hit.getTick(), FLARE_WINDOW_TICKS)
 			|| within(explodeTicks, hit.getTick(), FLARE_WINDOW_TICKS)
 			? Optional.of(DamageSource.FLARE) : Optional.<DamageSource>empty());
