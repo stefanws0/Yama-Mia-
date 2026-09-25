@@ -12,6 +12,7 @@ import com.yamareviewer.domain.event.HitsplatKind;
 import com.yamareviewer.domain.event.HitsplatObserved;
 import com.yamareviewer.domain.event.InventoryDelta;
 import com.yamareviewer.domain.event.ObjectAnimationObserved;
+import com.yamareviewer.domain.event.OverheadTextObserved;
 import com.yamareviewer.domain.event.Position;
 import com.yamareviewer.domain.event.ProjectileObserved;
 import com.yamareviewer.domain.event.VarbitObserved;
@@ -41,6 +42,7 @@ import net.runelite.api.events.GameObjectSpawned;
 import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.api.events.OverheadTextChanged;
 import net.runelite.api.events.ProjectileMoved;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InventoryID;
@@ -119,6 +121,21 @@ public class EventTranslatorTest
 
 		assertEquals(List.of(new HitsplatObserved(12, Actor.YAMA, HitsplatKind.BLOCK, 0, HitsplatID.BLOCK_ME, true)),
 			translator.hitsplatApplied(event));
+	}
+
+	@Test
+	public void overheadTextOfNpcsIsRecordedButPlayerChatNever()
+	{
+		Player self = mock(Player.class);
+		Player partner = mock(Player.class);
+		when(actors.resolve(self)).thenReturn(Actor.SELF);
+		when(actors.resolve(partner)).thenReturn(Actor.PARTNER);
+		capture = true;
+
+		assertEquals(List.of(new OverheadTextObserved(12, Actor.YAMA, "Enough.")), translator.overheadTextChanged(new OverheadTextChanged(yama, "Enough.")));
+		assertTrue(translator.overheadTextChanged(new OverheadTextChanged(self, "hi")).isEmpty());
+		assertTrue(translator.overheadTextChanged(new OverheadTextChanged(partner, "hi")).isEmpty());
+		assertTrue(translator.overheadTextChanged(new OverheadTextChanged(stranger, "hi")).isEmpty());
 	}
 
 	@Test

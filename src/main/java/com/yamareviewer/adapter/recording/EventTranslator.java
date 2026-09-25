@@ -49,6 +49,7 @@ import net.runelite.api.Hitsplat;
 import net.runelite.api.HitsplatID;
 import net.runelite.api.Item;
 import net.runelite.api.NPC;
+import net.runelite.api.Player;
 import net.runelite.api.Projectile;
 import net.runelite.api.Renderable;
 import net.runelite.api.events.AnimationChanged;
@@ -168,8 +169,13 @@ public final class EventTranslator
 			hitsplat.getHitsplatType(), hitsplat.isMine()));
 	}
 
+	/** Only NPC overheads; a player's overhead text is their public chat and is never recorded, not even in capture mode. */
 	public List<DomainEvent> overheadTextChanged(OverheadTextChanged event)
 	{
+		if (event.getActor() instanceof Player)
+		{
+			return List.of();
+		}
 		Actor actor = actors.resolve(event.getActor());
 		return keep(actor) ? List.of(new OverheadTextObserved(tick.getAsInt(), actor, event.getOverheadText())) : List.of();
 	}

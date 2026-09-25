@@ -194,7 +194,7 @@ Events record observations with raw IDs. None of them contains a classification.
 | `NpcChangedObserved` (`npc-changed`) | actor, old id, new id | `NpcChanged` |
 | `ObjectSpawnObserved` / `ObjectDespawnObserved` (`object-spawn`, `object-despawn`) | objectId, position | `GameObjectSpawned` / `GameObjectDespawned` |
 | `ObjectAnimationObserved` (`object-animation`) | objectId, position, animationId | polled each tick for glyph-role objects (every dynamic object in capture mode); RuneLite has no event for object animations |
-| `OverheadTextObserved` (`overhead`) | actor, text | `OverheadTextChanged` |
+| `OverheadTextObserved` (`overhead`) | actor, text | `OverheadTextChanged` of NPCs only; a player's overhead text is public chat and is never recorded, not even in capture mode |
 | `GameMessageObserved` (`game-message`) | text, with colour tags | `ChatMessage` of type `GAMEMESSAGE` (system messages only, never player chat) |
 | `VarbitObserved` (`varbit`) | varbitId, value | `VarbitChanged`, only varbits that have a role |
 | `WidgetTextObserved` (`widget-text`) | componentId, text | the contract name component when its interface loads (6.3) |
