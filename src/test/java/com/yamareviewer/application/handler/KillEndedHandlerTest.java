@@ -1,8 +1,10 @@
 package com.yamareviewer.application.handler;
 
 import com.yamareviewer.application.port.LogRepository;
+import com.yamareviewer.application.port.ReportRepository;
 import com.yamareviewer.application.port.ReviewPublisher;
 import com.yamareviewer.application.port.ReviewRepository;
+import com.yamareviewer.domain.diagnosis.Versions;
 import com.yamareviewer.domain.event.EndReason;
 import com.yamareviewer.domain.history.HistoryIndex;
 import com.yamareviewer.domain.history.HistoryKey;
@@ -17,7 +19,9 @@ import com.yamareviewer.domain.review.ReviewStatus;
 import com.yamareviewer.testing.KillLogBuilder;
 import com.yamareviewer.testing.TestIds;
 import java.io.IOException;
+import java.time.Clock;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -43,13 +47,28 @@ public class KillEndedHandlerTest
 	private KillEndedHandler handler(boolean active)
 	{
 		ReviewBuilder builder = new ReviewBuilder(List.of(), TestIds.registry(), Rules.DEFAULT);
-		return new KillEndedHandler(executor, logs, reviews, builder, publisher, () -> active, () -> 20, () -> 50, () -> ReviewSettings.DEFAULT);
+		return new KillEndedHandler(executor, logs, reviews, builder, publisher, () -> active, () -> 20, () -> 50, () -> ReviewSettings.DEFAULT,
+			List.of(), new ProblemReporter(NO_REPORTS, TestIds.registry(), () -> new Versions("0.1.0", "test", "0"), Clock.systemUTC()));
 	}
 
 	private static KillLog kill()
 	{
 		return KillLogBuilder.kill().ticks(2).end(EndReason.YAMA_DIED);
 	}
+
+	private static final ReportRepository NO_REPORTS = new ReportRepository()
+	{
+		@Override
+		public void save(String fileName, String text)
+		{
+		}
+
+		@Override
+		public Optional<String> latest()
+		{
+			return Optional.empty();
+		}
+	};
 
 	@Test
 	public void storesTheLogAndTheReviewThenPublishesOnTheExecutor() throws Exception

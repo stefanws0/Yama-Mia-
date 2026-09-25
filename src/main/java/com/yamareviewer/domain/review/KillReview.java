@@ -39,6 +39,13 @@ public class KillReview
 	Section<CrashSummary> crashes;
 	Section<WaveSummary> waves;
 	Section<SpecSummary> specs;
+	/** Names of the health checks that failed (Part 4); empty for reviews stored before Part 4. */
+	List<String> failedChecks;
+
+	public List<String> getFailedChecks()
+	{
+		return failedChecks == null ? List.of() : failedChecks;
+	}
 
 	public Section<PhaseTimes> getPhases()
 	{

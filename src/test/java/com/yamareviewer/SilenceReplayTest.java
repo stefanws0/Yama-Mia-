@@ -12,9 +12,12 @@ import com.yamareviewer.adapter.recording.PositionReader;
 import com.yamareviewer.adapter.recording.TickSampler;
 import com.yamareviewer.application.command.KillSession;
 import com.yamareviewer.application.handler.KillEndedHandler;
+import com.yamareviewer.application.handler.ProblemReporter;
 import com.yamareviewer.application.port.LogRepository;
+import com.yamareviewer.application.port.ReportRepository;
 import com.yamareviewer.application.port.ReviewPublisher;
 import com.yamareviewer.application.port.ReviewRepository;
+import com.yamareviewer.domain.diagnosis.Versions;
 import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.event.EndReason;
 import com.yamareviewer.domain.event.SuppliesSnapshot;
@@ -89,7 +92,8 @@ public class SilenceReplayTest
 		LogRepository logs = new GsonLogRepository(files, new EventCodec(gson));
 		ReviewRepository reviews = new GsonReviewRepository(files, gson);
 		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), ids, Rules.DEFAULT);
-		handler = new KillEndedHandler(executor, logs, reviews, builder, publisher, () -> true, () -> 20, () -> 50, () -> ReviewSettings.DEFAULT);
+		handler = new KillEndedHandler(executor, logs, reviews, builder, publisher, () -> true, () -> 20, () -> 50, () -> ReviewSettings.DEFAULT,
+			List.of(), new ProblemReporter(NO_REPORTS, TestIds.registry(), () -> new Versions("0.1.0", "test", "0"), Clock.systemUTC()));
 		KillSession session = new KillSession(handler, (tick, kind) -> Optional.of(new SuppliesSnapshot(tick, kind, List.of())),
 			Clock.systemUTC(), () -> "kill-1", "0.2.0", ids.fingerprint(), () -> false);
 		ActorResolver actors = new ActorResolver(client, ids, session::partnerName);
@@ -102,6 +106,20 @@ public class SilenceReplayTest
 	{
 		executor.shutdownNow();
 	}
+
+	private static final ReportRepository NO_REPORTS = new ReportRepository()
+	{
+		@Override
+		public void save(String fileName, String text)
+		{
+		}
+
+		@Override
+		public Optional<String> latest()
+		{
+			return Optional.empty();
+		}
+	};
 
 	private void drain() throws Exception
 	{

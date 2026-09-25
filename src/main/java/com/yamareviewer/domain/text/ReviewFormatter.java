@@ -52,7 +52,24 @@ public final class ReviewFormatter
 		sections.add(P3Text.specs(review));
 		sections.add(section("Supplies", review.getSupplies(), ReviewFormatter::supplyLines));
 		sections.add(P3Text.tickLog(review));
+		if (!review.getFailedChecks().isEmpty())
+		{
+			sections.add(0, failedChecksSection(review));
+		}
 		return new ReviewView(headline(review), status(review), List.copyOf(sections));
+	}
+
+	/** Part 4: why numbers are missing, shown before every other section. */
+	static ViewSection failedChecksSection(KillReview review)
+	{
+		List<String> lines = new ArrayList<>();
+		lines.add("Some numbers are hidden because these checks failed:");
+		for (String name : review.getFailedChecks())
+		{
+			lines.add("- " + name);
+		}
+		lines.add("Use \"Report a problem\" at the bottom of the panel to send the report.");
+		return new ViewSection("Health checks failed", List.copyOf(lines), null);
 	}
 
 	/** "Yama (solo, Bloodied Blows) 4:12", "… died in P3 at 3:10", "… left in P2 at 2:00"; "n/a" without phases. */

@@ -4,6 +4,9 @@ import com.yamareviewer.application.command.KillEndedListener;
 import com.yamareviewer.application.port.LogRepository;
 import com.yamareviewer.application.port.ReviewPublisher;
 import com.yamareviewer.application.port.ReviewRepository;
+import com.yamareviewer.domain.health.CheckOutcome;
+import com.yamareviewer.domain.health.HealthCheck;
+import com.yamareviewer.domain.health.HealthCheckRunner;
 import com.yamareviewer.domain.history.HistoryIndex;
 import com.yamareviewer.domain.history.HistoryProjector;
 import com.yamareviewer.domain.model.KillLog;
@@ -14,6 +17,7 @@ import com.yamareviewer.domain.projection.ReviewSettings;
 import com.yamareviewer.domain.review.KillReview;
 import java.io.IOException;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
@@ -24,10 +28,9 @@ import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Everything that happens after a kill, on the plugin's own executor (spec 4.3): store the raw log, build
- * the review, store it, rebuild the history, publish if the plugin is still active. Storage failures are
- * logged and the review is still published (spec 11). Part 4 runs the health checks between the build and
- * the assembly.
+ * Everything that happens after a kill, on the plugin's own executor (spec 4.3): store the raw log, build the
+ * review, run the health checks, write a report when one fails, store the review, rebuild the history and
+ * publish if the plugin is still active. Storage failures are logged and the review is still published (spec 11).
  */
 @Slf4j
 public final class KillEndedHandler implements KillEndedListener
@@ -41,11 +44,13 @@ public final class KillEndedHandler implements KillEndedListener
 	private final IntSupplier rawLogsKept;
 	private final IntSupplier historySize;
 	private final Supplier<ReviewSettings> settings;
+	private final List<HealthCheck> checks;
+	private final ProblemReporter reporter;
 	private volatile Future<?> pending = CompletableFuture.completedFuture(null);
 
-	public KillEndedHandler(ExecutorService executor, LogRepository logs, ReviewRepository reviews,
-		ReviewBuilder builder, ReviewPublisher publisher, BooleanSupplier active,
-		IntSupplier rawLogsKept, IntSupplier historySize, Supplier<ReviewSettings> settings)
+	public KillEndedHandler(ExecutorService executor, LogRepository logs, ReviewRepository reviews, ReviewBuilder builder,
+		ReviewPublisher publisher, BooleanSupplier active, IntSupplier rawLogsKept, IntSupplier historySize,
+		Supplier<ReviewSettings> settings, List<HealthCheck> checks, ProblemReporter reporter)
 	{
 		this.executor = executor;
 		this.logs = logs;
@@ -56,6 +61,8 @@ public final class KillEndedHandler implements KillEndedListener
 		this.rawLogsKept = rawLogsKept;
 		this.historySize = historySize;
 		this.settings = settings;
+		this.checks = checks;
+		this.reporter = reporter;
 	}
 
 	@Override
@@ -94,11 +101,20 @@ public final class KillEndedHandler implements KillEndedListener
 		try
 		{
 			ProjectionContext context = builder.run(kill, settings.get());
-			review = KillReviewAssembler.assemble(kill, context);
+			List<CheckOutcome> outcomes = HealthCheckRunner.apply(kill, context, checks);
+			review = KillReviewAssembler.assemble(kill, context).toBuilder()
+				.failedChecks(CheckOutcome.failedNames(outcomes))
+				.build()
+				.withRecomputedStatus();
+			if (CheckOutcome.anyFailed(outcomes))
+			{
+				Optional<String> report = reporter.reportFailedChecks(kill, context, outcomes);
+				log.info("Health checks failed for kill {}: {}; report {}", killId, review.getFailedChecks(), report.orElse("not written"));
+			}
 		}
 		catch (RuntimeException e)
 		{
-			log.error("Could not review kill {}", killId, e);
+			log.warn("Could not review kill {}", killId, e);
 			return;
 		}
 
@@ -112,30 +128,26 @@ public final class KillEndedHandler implements KillEndedListener
 		{
 			log.warn("Could not store review {}", killId, e);
 		}
-
-		HistoryIndex history;
+		HistoryIndex index;
 		try
 		{
-			history = HistoryProjector.index(reviews.loadAll(), keep);
+			index = HistoryProjector.index(reviews.loadAll(), keep);
 		}
 		catch (IOException | RuntimeException e)
 		{
-			log.warn("Could not load the review history; showing this kill only", e);
-			history = HistoryProjector.index(List.of(review), keep);
+			log.warn("Could not load the history; showing this kill only", e);
+			index = HistoryProjector.index(List.of(review), keep);
 		}
-
-		if (!active.getAsBoolean())
+		if (active.getAsBoolean())
 		{
-			log.debug("Plugin inactive; review {} not published", killId);
-			return;
-		}
-		try
-		{
-			publisher.publish(review, history);
-		}
-		catch (RuntimeException e)
-		{
-			log.warn("Could not publish review {}", killId, e);
+			try
+			{
+				publisher.publish(review, index);
+			}
+			catch (RuntimeException e)
+			{
+				log.warn("Could not publish review {}", killId, e);
+			}
 		}
 	}
 }

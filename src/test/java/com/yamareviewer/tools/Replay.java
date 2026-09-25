@@ -5,6 +5,9 @@ import com.google.gson.GsonBuilder;
 import com.yamareviewer.adapter.ids.BuiltInIds;
 import com.yamareviewer.adapter.persistence.EventCodec;
 import com.yamareviewer.domain.event.DomainEvent;
+import com.yamareviewer.domain.health.CheckOutcome;
+import com.yamareviewer.domain.health.HealthCheckRunner;
+import com.yamareviewer.domain.health.HealthChecks;
 import com.yamareviewer.domain.ids.IdRegistry;
 import com.yamareviewer.domain.ids.Rules;
 import com.yamareviewer.domain.model.KillHeader;
@@ -50,6 +53,12 @@ public final class Replay
 		}
 		KillReview review = review(read(Path.of(args[0])));
 		System.out.print(text(ReviewFormatter.format(review)));
+		System.out.println();
+		System.out.println("== Health checks");
+		for (CheckOutcome outcome : checks(read(Path.of(args[0]))))
+		{
+			System.out.println("  " + outcome.name() + ": " + outcome.getResult());
+		}
 		if (args.length == 2)
 		{
 			Files.write(Path.of(args[1]), json(review).getBytes(StandardCharsets.UTF_8));
@@ -100,6 +109,13 @@ public final class Replay
 		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), ids, Rules.DEFAULT);
 		ProjectionContext context = builder.run(log, ReviewSettings.DEFAULT);
 		return KillReviewAssembler.assemble(log, context);
+	}
+
+	/** The health checks on the context the plugin would use; the review of review(log) is left as it is. */
+	public static List<CheckOutcome> checks(KillLog log)
+	{
+		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), BuiltInIds.registry(), Rules.DEFAULT);
+		return HealthCheckRunner.apply(log, builder.run(log, ReviewSettings.DEFAULT), HealthChecks.standard());
 	}
 
 	public static String json(KillReview review)

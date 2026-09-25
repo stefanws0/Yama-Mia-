@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.inject.Provides;
 import com.yamareviewer.adapter.ids.BuiltInIds;
 import com.yamareviewer.adapter.persistence.EventCodec;
+import com.yamareviewer.adapter.persistence.FileReportRepository;
 import com.yamareviewer.adapter.persistence.FileStore;
 import com.yamareviewer.adapter.persistence.FilepathFileStore;
 import com.yamareviewer.adapter.persistence.GsonLogRepository;
@@ -26,9 +27,13 @@ import com.yamareviewer.adapter.ui.SystemClipboard;
 import com.yamareviewer.application.command.KillSession;
 import com.yamareviewer.application.handler.HistoryLoader;
 import com.yamareviewer.application.handler.KillEndedHandler;
+import com.yamareviewer.application.handler.ProblemReporter;
 import com.yamareviewer.application.port.LogRepository;
+import com.yamareviewer.application.port.ReportRepository;
 import com.yamareviewer.application.port.ReviewPublisher;
 import com.yamareviewer.application.port.ReviewRepository;
+import com.yamareviewer.domain.diagnosis.Versions;
+import com.yamareviewer.domain.health.HealthChecks;
 import com.yamareviewer.domain.ids.IdRegistry;
 import com.yamareviewer.domain.ids.Rules;
 import com.yamareviewer.domain.projection.Projections;
@@ -37,6 +42,7 @@ import com.yamareviewer.domain.projection.ReviewSettings;
 import com.yamareviewer.domain.text.ChatLineOptions;
 import java.time.Clock;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -44,6 +50,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.client.RuneLiteProperties;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
@@ -120,6 +127,10 @@ public class YamaReviewerPlugin extends Plugin
 		LogRepository logs = new GsonLogRepository(files, new EventCodec(gson));
 		ReviewRepository reviews = new GsonReviewRepository(files, gson);
 		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), ids, Rules.DEFAULT);
+		ReportRepository reports = new FileReportRepository(files);
+		ProblemReporter reporter = new ProblemReporter(reports, ids,
+			() -> new Versions(VERSION, Objects.toString(RuneLiteProperties.getVersion(), "dev"), String.valueOf(client.getRevision())),
+			Clock.systemDefaultZone());
 
 		ReviewPanel panel = new ReviewPanel(SystemClipboard::copy);
 		KillReviewOpener opener = new KillReviewOpener(executor, reviews, panel);
@@ -128,7 +139,7 @@ public class YamaReviewerPlugin extends Plugin
 			chatPublishers.create(this::chatLineOptions),
 			new PanelReviewPublisher(panel)));
 		KillEndedHandler handler = new KillEndedHandler(executor, logs, reviews, builder, publisher, active::get,
-			config::rawLogsKept, config::historySize, this::reviewSettings);
+			config::rawLogsKept, config::historySize, this::reviewSettings, HealthChecks.standard(), reporter);
 
 		ItemLookup items = new ItemManagerLookup(itemManager);
 		session = new KillSession(handler, new SnapshotReader(client, items), Clock.systemUTC(),
