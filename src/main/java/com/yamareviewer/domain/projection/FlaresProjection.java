@@ -22,13 +22,15 @@ import com.yamareviewer.domain.review.FlareWave;
 import com.yamareviewer.domain.review.Section;
 import java.util.ArrayList;
 import java.util.EnumSet;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 /**
  * Spec 6.8. A flare is spawned by its first NpcSpawnObserved (a respawn inside a scene reload adds nothing);
+ * the server reuses a freed NPC index, so a spawn on an index whose flare has already despawned starts a new
+ * flare, and animations, hitsplats and despawns on that index go to the newest one;
  * waves are spawns within 3 ticks of each other; the cause is the latest YAMA_FLARE_SUMMON or YAMA_MELEE in
  * the 5 ticks before the spawn. Exploded: FLARE_EXPLODE on the flare, or a heal hitsplat on Yama or FLARE_HEAL
  * on Yama within 1 tick of the despawn. Killed: FLARE_DEATH or a dying despawn without an explosion; killed
@@ -58,7 +60,8 @@ public final class FlaresProjection implements Projection<FlareSummary>
 	{
 		IdRegistry ids = context.ids();
 		int specWindow = context.rules().getSpecResultWindow();
-		Map<Integer, Tracked> flares = new LinkedHashMap<>();
+		List<Tracked> flares = new ArrayList<>();
+		Map<Integer, Tracked> live = new HashMap<>();
 		List<Integer> summonTicks = new ArrayList<>();
 		List<Integer> meleeTicks = new ArrayList<>();
 		List<Integer> purgingTicks = new ArrayList<>();
@@ -79,13 +82,19 @@ public final class FlaresProjection implements Projection<FlareSummary>
 				if (isFlare(spawn.getActor(), spawn.getNpcId(), ids))
 				{
 					int index = indexOf(spawn.getActor(), spawn.getNpcIndex());
-					flares.computeIfAbsent(index, i -> new Tracked(i, tick, causeOf(tick, summonTicks, meleeTicks)));
+					Tracked previous = live.get(index);
+					if (previous == null || previous.despawnTick != null)
+					{
+						Tracked flare = new Tracked(index, tick, causeOf(tick, summonTicks, meleeTicks));
+						flares.add(flare);
+						live.put(index, flare);
+					}
 				}
 			}
 			else if (event instanceof NpcDespawnObserved)
 			{
 				NpcDespawnObserved despawn = (NpcDespawnObserved) event;
-				Tracked flare = isFlare(despawn.getActor(), despawn.getNpcId(), ids) ? flares.get(indexOf(despawn.getActor(), despawn.getNpcIndex())) : null;
+				Tracked flare = isFlare(despawn.getActor(), despawn.getNpcId(), ids) ? live.get(indexOf(despawn.getActor(), despawn.getNpcIndex())) : null;
 				if (flare != null && flare.despawnTick == null && (!loading || despawn.isDying()))
 				{
 					flare.despawnTick = tick;
@@ -109,9 +118,9 @@ public final class FlaresProjection implements Projection<FlareSummary>
 				{
 					purgingTicks.add(tick);
 				}
-				else if (actor.getKind() == ActorKind.FLARE && flares.containsKey(actor.getRef()))
+				else if (actor.getKind() == ActorKind.FLARE && live.containsKey(actor.getRef()))
 				{
-					Tracked flare = flares.get(actor.getRef());
+					Tracked flare = live.get(actor.getRef());
 					if (ids.is(Role.FLARE_EXPLODE, id))
 					{
 						flare.exploded = true;
@@ -127,9 +136,9 @@ public final class FlaresProjection implements Projection<FlareSummary>
 				HitsplatObserved hitsplat = (HitsplatObserved) event;
 				Actor target = hitsplat.getTarget();
 				if (target.getKind() == ActorKind.FLARE && hitsplat.getKind() == HitsplatKind.DAMAGE && hitsplat.isMine()
-					&& flares.containsKey(target.getRef()))
+					&& live.containsKey(target.getRef()))
 				{
-					flares.get(target.getRef()).lastOwnHitTick = tick;
+					live.get(target.getRef()).lastOwnHitTick = tick;
 				}
 				else if (target.equals(Actor.YAMA) && hitsplat.getKind() == HitsplatKind.HEAL)
 				{
@@ -149,7 +158,7 @@ public final class FlaresProjection implements Projection<FlareSummary>
 
 		int fightEnd = log.lastTick();
 		List<FlareResult> results = new ArrayList<>();
-		for (Tracked flare : flares.values())
+		for (Tracked flare : flares)
 		{
 			boolean exploded = flare.exploded
 				|| (flare.despawnTick != null && near(explosionSignalTicks, flare.despawnTick, EXPLOSION_WINDOW_TICKS));

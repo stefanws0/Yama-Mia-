@@ -170,6 +170,30 @@ public class FlaresProjectionTest
 	}
 
 	@Test
+	public void aReusedIndexAfterTheDespawnIsANewFlare()
+	{
+		KillLog kill = KillLogBuilder.kill()
+			.ticks(20).yamaAnimates(SUMMON)
+			.ticks(2).npcSpawns(flare(1), FLARE_ID)
+			.ticks(10).animates(flare(1), DEATH).npcDespawns(flare(1), FLARE_ID, true)
+			.ticks(18).yamaAnimates(SUMMON)
+			.ticks(2).npcSpawns(flare(1), FLARE_ID)
+			.ticks(8).animates(flare(1), EXPLODE)
+			.ticks(1).npcDespawns(flare(1), FLARE_ID, false)
+			.ticks(5).end(EndReason.YAMA_DIED);
+
+		FlareSummary summary = project(kill);
+
+		assertEquals(2, summary.spawned());
+		assertEquals(1, summary.killed());
+		assertEquals(1, summary.exploded());
+		assertEquals(List.of(
+			new FlareWave(22, 32, List.of(new FlareResult(1, 22, 32, FlareCause.SUMMONED, FlareFate.KILLED, false))),
+			new FlareWave(52, 61, List.of(new FlareResult(1, 52, 61, FlareCause.SUMMONED, FlareFate.EXPLODED, false)))),
+			summary.getWaves());
+	}
+
+	@Test
 	public void needsTheFlareRole()
 	{
 		FlaresProjection projection = new FlaresProjection();
