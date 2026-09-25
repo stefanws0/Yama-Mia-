@@ -98,7 +98,7 @@ public class SilenceReplayTest
 			Clock.systemUTC(), () -> "kill-1", "0.2.0", ids.fingerprint(), () -> false);
 		ActorResolver actors = new ActorResolver(client, ids, session::partnerName);
 		EventTranslator translator = new EventTranslator(ids, actors, session::currentTick, () -> false, itemId -> "item", positions);
-		listener = new GameEventListener(client, ids, session, translator, sampler, positions, npcUtil, handler::pending);
+		listener = new GameEventListener(client, ids, session, translator, sampler, positions, npcUtil, handler::pending, id -> { });
 	}
 
 	@After

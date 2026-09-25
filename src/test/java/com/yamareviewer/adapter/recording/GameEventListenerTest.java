@@ -53,9 +53,10 @@ public class GameEventListenerTest
 	private final TickSampler sampler = mock(TickSampler.class);
 	private final NpcUtil npcUtil = mock(NpcUtil.class);
 	private final List<KillLog> ended = new ArrayList<>();
+	private final List<Integer> unknownYamaIds = new ArrayList<>();
 	private final IdRegistry ids = new IdRegistry(
 		Map.of(Role.YAMA, Set.of(100), Role.YAMAS_DOMAIN, Set.of(6045), Role.VOICE_OF_YAMA, Set.of(200),
-			Role.CONTRACT_ITEM_BLOODIED_BLOWS, Set.of(700)),
+			Role.CONTRACT_ITEM_BLOODIED_BLOWS, Set.of(700), Role.YAMA_SITTING, Set.of(124)),
 		Map.of());
 	private KillSession session;
 	private GameEventListener listener;
@@ -74,7 +75,15 @@ public class GameEventListenerTest
 		ActorResolver actors = new ActorResolver(client, ids, session::partnerName);
 		EventTranslator translator = new EventTranslator(ids, actors, session::currentTick, () -> false, itemId -> "item", positions);
 		listener = new GameEventListener(client, ids, session, translator, sampler, positions, npcUtil,
-			() -> CompletableFuture.completedFuture(null));
+			() -> CompletableFuture.completedFuture(null), unknownYamaIds::add);
+	}
+
+	private static NPC named(int id, String name)
+	{
+		NPC npc = mock(NPC.class);
+		when(npc.getId()).thenReturn(id);
+		when(npc.getName()).thenReturn(name);
+		return npc;
 	}
 
 	@Test
@@ -198,5 +207,67 @@ public class GameEventListenerTest
 		listener.onNpcSpawned(new NpcSpawned(yama));
 
 		assertEquals(Optional.empty(), session.partnerName());
+	}
+
+	@Test
+	public void anUnknownNpcNamedYamaWhileArmedIsReported()
+	{
+		listener.onGameTick(new GameTick());
+
+		listener.onNpcSpawned(new NpcSpawned(named(999, "<col=ff0000>Yama</col>")));
+
+		assertEquals(List.of(999), unknownYamaIds);
+		assertFalse(session.isFighting());
+	}
+
+	@Test
+	public void theSittingYamaIsNotReported()
+	{
+		listener.onGameTick(new GameTick());
+
+		listener.onNpcSpawned(new NpcSpawned(named(124, "Yama")));
+
+		assertTrue(unknownYamaIds.isEmpty());
+	}
+
+	@Test
+	public void otherUnknownNpcsAreNotReported()
+	{
+		listener.onGameTick(new GameTick());
+
+		listener.onNpcSpawned(new NpcSpawned(named(999, "Judge of Yama")));
+		listener.onNpcSpawned(new NpcSpawned(named(998, null)));
+
+		assertTrue(unknownYamaIds.isEmpty());
+	}
+
+	@Test
+	public void anUnknownYamaOutsideTheDomainOrDuringAFightIsNotReported()
+	{
+		when(positions.regionId(any())).thenReturn(1234);
+		listener.onNpcSpawned(new NpcSpawned(named(999, "Yama")));
+		assertTrue(unknownYamaIds.isEmpty());
+
+		when(positions.regionId(any())).thenReturn(6045);
+		listener.onNpcSpawned(new NpcSpawned(yama));
+		listener.onNpcSpawned(new NpcSpawned(named(999, "Yama")));
+		assertTrue(unknownYamaIds.isEmpty());
+	}
+
+	@Test
+	public void eachUnknownIdIsReportedOncePerLogin()
+	{
+		listener.onGameTick(new GameTick());
+		listener.onNpcSpawned(new NpcSpawned(named(999, "Yama")));
+		listener.onNpcSpawned(new NpcSpawned(named(999, "Yama")));
+		assertEquals(List.of(999), unknownYamaIds);
+
+		GameStateChanged loggedOut = new GameStateChanged();
+		loggedOut.setGameState(GameState.LOGIN_SCREEN);
+		listener.onGameStateChanged(loggedOut);
+		listener.onGameTick(new GameTick());
+		listener.onNpcSpawned(new NpcSpawned(named(999, "Yama")));
+
+		assertEquals(List.of(999, 999), unknownYamaIds);
 	}
 }

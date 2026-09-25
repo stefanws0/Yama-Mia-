@@ -148,7 +148,7 @@ public class YamaReviewerPlugin extends Plugin
 		ActorResolver actors = new ActorResolver(client, ids, session::partnerName);
 		EventTranslator translator = new EventTranslator(ids, actors, session::currentTick, config::captureMode, items::name, positions);
 		listener = new GameEventListener(client, ids, session, translator, new TickSampler(client, actors, positions),
-			positions, npcUtil, handler::pending);
+			positions, npcUtil, handler::pending, id -> { });
 
 		navigationButton = NavigationButton.builder()
 			.tooltip("Yama Reviewer")

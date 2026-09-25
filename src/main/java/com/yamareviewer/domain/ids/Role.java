@@ -8,6 +8,8 @@ import java.util.Set;
 public enum Role
 {
 	YAMA(RoleKind.NPC),
+	/** Yama on his throne before and after a fight: also named "Yama", never a fight (spec 5.3 self-check). */
+	YAMA_SITTING(RoleKind.NPC),
 	JUDGE(RoleKind.NPC),
 	VOID_FLARE(RoleKind.NPC),
 	VOICE_OF_YAMA(RoleKind.NPC),

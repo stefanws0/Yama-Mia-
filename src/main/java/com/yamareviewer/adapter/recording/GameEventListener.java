@@ -6,16 +6,20 @@ import com.yamareviewer.application.command.SessionState;
 import com.yamareviewer.domain.event.DomainEvent;
 import com.yamareviewer.domain.ids.IdRegistry;
 import com.yamareviewer.domain.ids.Role;
+import com.yamareviewer.domain.ids.RoleKind;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Future;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.ItemContainer;
@@ -53,6 +57,7 @@ import net.runelite.client.util.Text;
  * The only receiver of RuneLite game events. Decides when a fight starts and ends and forwards
  * observations; it never classifies and never touches output. All handlers run on the client thread.
  */
+@Slf4j
 public class GameEventListener
 {
 	/** How long before the fight a contract item may have left the inventory (spec 6.3). */
@@ -72,8 +77,15 @@ public class GameEventListener
 	private final Map<Integer, Integer> contractItemsLastSeen = new HashMap<>();
 	private NPC yama;
 
+	/** The NPC name that marks Yama in any form (the combat NPC and the one on the throne). */
+	private static final String YAMA_NAME = "Yama";
+
+	private final Consumer<Integer> unknownYama;
+	private final Set<Integer> reportedYamaIds = new HashSet<>();
+
 	public GameEventListener(Client client, IdRegistry ids, KillSession session, EventTranslator translator,
-		TickSampler sampler, PositionReader positions, NpcUtil npcUtil, Supplier<Future<?>> pendingWrite)
+		TickSampler sampler, PositionReader positions, NpcUtil npcUtil, Supplier<Future<?>> pendingWrite,
+		Consumer<Integer> unknownYama)
 	{
 		this.client = client;
 		this.ids = ids;
@@ -83,6 +95,7 @@ public class GameEventListener
 		this.positions = positions;
 		this.npcUtil = npcUtil;
 		this.pendingWrite = pendingWrite;
+		this.unknownYama = unknownYama;
 	}
 
 	@Subscribe
@@ -111,6 +124,7 @@ public class GameEventListener
 			pendingWidgetReads.clear();
 			contractItemsLastSeen.clear();
 			yama = null;
+			reportedYamaIds.clear();
 		}
 	}
 
@@ -122,6 +136,10 @@ public class GameEventListener
 		{
 			yama = npc;
 			startFightIfArmed();
+		}
+		else
+		{
+			selfCheck(npc);
 		}
 		record(translator.npcSpawned(npc));
 	}
@@ -145,6 +163,10 @@ public class GameEventListener
 	@Subscribe
 	public void onNpcChanged(NpcChanged event)
 	{
+		if (!ids.is(Role.YAMA, event.getNpc().getId()))
+		{
+			selfCheck(event.getNpc());
+		}
 		record(translator.npcChanged(event));
 	}
 
@@ -330,6 +352,25 @@ public class GameEventListener
 			Map<Integer, Integer> inventoryNow = currentInventory();
 			translator.reset(inventoryNow);
 			recordContractConsumedAtChallenge(inventoryNow);
+		}
+	}
+
+	/**
+	 * Spec 5.3: an NPC named "Yama" with an id that has no NPC role, while armed, means the combat Yama was
+	 * renumbered and no kill can be recorded. Reported once per id per login; the report is written elsewhere.
+	 */
+	private void selfCheck(NPC npc)
+	{
+		String name = npc.getName();
+		if (name == null || !YAMA_NAME.equals(Text.removeTags(name)) || ids.roleOf(RoleKind.NPC, npc.getId()).isPresent())
+		{
+			return;
+		}
+		session.updateRegion(inYamasDomain());
+		if (session.state() == SessionState.ARMED && reportedYamaIds.add(npc.getId()))
+		{
+			log.debug("Unknown NPC named Yama with id {} while armed", npc.getId());
+			unknownYama.accept(npc.getId());
 		}
 	}
 

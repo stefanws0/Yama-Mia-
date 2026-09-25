@@ -33,6 +33,7 @@ public final class BuiltInIds
 		Map<Role, Set<Integer>> ids = new EnumMap<>(Role.class);
 
 		ids.put(Role.YAMA, Set.of(NpcID.YAMA));
+		ids.put(Role.YAMA_SITTING, Set.of(NpcID.YAMA_THRONE_OCCUPIED));
 		ids.put(Role.JUDGE, Set.of(NpcID.YAMA_JUDGE_OF_YAMA));
 		ids.put(Role.VOID_FLARE, Set.of(NpcID.YAMA_VOIDFLARE));
 		ids.put(Role.VOICE_OF_YAMA, Set.of(NpcID.VOICE_OF_YAMA_1OP, NpcID.VOICE_OF_YAMA_2OP, NpcID.VOICE_OF_YAMA_3OP));

@@ -37,6 +37,12 @@ public class BuiltInIdsTest
 	}
 
 	@Test
+	public void theSittingYamaIsKnownSoTheSelfCheckIgnoresHim()
+	{
+		assertEquals(Set.of(net.runelite.api.gameval.NpcID.YAMA_THRONE_OCCUPIED), ids.ids(Role.YAMA_SITTING));
+	}
+
+	@Test
 	public void noIdBelongsToTwoRolesOfTheSameKind()
 	{
 		for (RoleKind kind : RoleKind.values())
