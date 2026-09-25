@@ -210,9 +210,30 @@ public class EventTranslatorTest
 		GameObjectSpawned spawned = new GameObjectSpawned();
 		spawned.setGameObject(glyph);
 
-		translator.gameObjectSpawned(spawned);
+		translator.gameObjectSpawned(spawned, () -> true);
 
 		assertEquals(List.of(new ObjectAnimationObserved(12, 500, new Position(1, 2, 0), 12169)), translator.pollObjectAnimations());
+		assertTrue(translator.pollObjectAnimations().isEmpty());
+	}
+
+	@Test
+	public void objectsOutsideTheArenaAreNotTrackedAndForgettingStopsPolling()
+	{
+		Animation activate = mock(Animation.class);
+		when(activate.getId()).thenReturn(12169);
+		DynamicObject renderable = mock(DynamicObject.class);
+		when(renderable.getAnimation()).thenReturn(activate);
+		GameObject glyph = mock(GameObject.class);
+		when(glyph.getId()).thenReturn(500);
+		when(glyph.getRenderable()).thenReturn(renderable);
+		GameObjectSpawned spawned = new GameObjectSpawned();
+		spawned.setGameObject(glyph);
+
+		assertEquals(1, translator.gameObjectSpawned(spawned, () -> false).size());
+		assertTrue(translator.pollObjectAnimations().isEmpty());
+
+		translator.gameObjectSpawned(spawned, () -> true);
+		translator.forgetObjects();
 		assertTrue(translator.pollObjectAnimations().isEmpty());
 	}
 

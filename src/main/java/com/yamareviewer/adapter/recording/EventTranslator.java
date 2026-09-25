@@ -215,11 +215,14 @@ public final class EventTranslator
 		return keep(actor) ? List.of(new NpcChangedObserved(tick.getAsInt(), actor, event.getOld().getId(), npc.getId())) : List.of();
 	}
 
-	/** Also starts tracking glyph objects (every object in capture mode) for animation polling. */
-	public List<DomainEvent> gameObjectSpawned(GameObjectSpawned event)
+	/**
+	 * Also starts tracking glyph objects (every object in capture mode) for animation polling, but only objects
+	 * in the arena; inArena is asked only for an object that would be tracked.
+	 */
+	public List<DomainEvent> gameObjectSpawned(GameObjectSpawned event, BooleanSupplier inArena)
 	{
 		GameObject object = event.getGameObject();
-		if (capture.getAsBoolean() || ids.roleOf(RoleKind.OBJECT, object.getId()).isPresent())
+		if ((capture.getAsBoolean() || ids.roleOf(RoleKind.OBJECT, object.getId()).isPresent()) && inArena.getAsBoolean())
 		{
 			trackedObjects.put(object, -1);
 		}
@@ -231,6 +234,12 @@ public final class EventTranslator
 		GameObject object = event.getGameObject();
 		trackedObjects.remove(object);
 		return List.of(new ObjectDespawnObserved(tick.getAsInt(), object.getId(), positions.position(object.getLocalLocation())));
+	}
+
+	/** Stops polling every tracked object: the scene is reloading or the player left the arena. */
+	public void forgetObjects()
+	{
+		trackedObjects.clear();
 	}
 
 	/** RuneLite has no event for object animations, so tracked objects are polled once per tick. */

@@ -21,6 +21,7 @@ import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.NPC;
@@ -101,7 +102,11 @@ public class GameEventListener
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
-		session.updateRegion(inYamasDomain());
+		updateRegion();
+		if (session.state() == SessionState.ARMED)
+		{
+			rememberContractItems(client.getItemContainer(InventoryID.INV));
+		}
 		if (!session.isFighting())
 		{
 			return;
@@ -110,6 +115,10 @@ public class GameEventListener
 		readPendingWidgets();
 		session.record(sampler.sample(session.currentTick(), yama, partner()));
 		session.endTick();
+		if (!session.isFighting())
+		{
+			pendingWidgetReads.clear();
+		}
 	}
 
 	@Subscribe
@@ -117,11 +126,15 @@ public class GameEventListener
 	{
 		GameState state = event.getGameState();
 		record(translator.gameState(state));
-		if (state == GameState.LOGIN_SCREEN || state == GameState.HOPPING)
+		if (state == GameState.LOADING)
+		{
+			translator.forgetObjects();
+		}
+		else if (state == GameState.LOGIN_SCREEN || state == GameState.HOPPING)
 		{
 			session.leave();
+			forgetScene();
 			players.clear();
-			pendingWidgetReads.clear();
 			contractItemsLastSeen.clear();
 			yama = null;
 			reportedYamaIds.clear();
@@ -241,10 +254,16 @@ public class GameEventListener
 		}
 	}
 
+	/**
+	 * Objects are tracked only in the arena: while armed or fighting, or for an object that loads with the arena's
+	 * scene before the first tick in it has armed the session.
+	 */
 	@Subscribe
 	public void onGameObjectSpawned(GameObjectSpawned event)
 	{
-		record(translator.gameObjectSpawned(event));
+		GameObject object = event.getGameObject();
+		record(translator.gameObjectSpawned(event,
+			() -> session.state() != SessionState.IDLE || ids.is(Role.YAMAS_DOMAIN, positions.regionId(object.getLocalLocation()))));
 	}
 
 	@Subscribe
@@ -338,7 +357,7 @@ public class GameEventListener
 
 	private void startFightIfArmed()
 	{
-		session.updateRegion(inYamasDomain());
+		updateRegion();
 		Player self = client.getLocalPlayer();
 		if (self == null || session.isFighting())
 		{
@@ -366,7 +385,7 @@ public class GameEventListener
 		{
 			return;
 		}
-		session.updateRegion(inYamasDomain());
+		updateRegion();
 		if (session.state() == SessionState.ARMED && reportedYamaIds.add(npc.getId()))
 		{
 			log.debug("Unknown NPC named Yama with id {} while armed", npc.getId());
@@ -374,8 +393,44 @@ public class GameEventListener
 		}
 	}
 
-	private void rememberContractItems(ItemContainer inventory)
+	/**
+	 * Moves the session between IDLE and ARMED (spec 5.3). Leaving is judged only while logged in, because a
+	 * scene reload may report a foreign region for a tick. Becoming armed remembers the contract items already in
+	 * the inventory (spec 6.3); going idle forgets the arena's tracked objects and pending widget reads (see
+	 * forgetScene).
+	 */
+	private void updateRegion()
 	{
+		boolean inside = inYamasDomain();
+		if (!inside && client.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+		SessionState before = session.state();
+		session.updateRegion(inside);
+		if (before == SessionState.IDLE && session.state() == SessionState.ARMED)
+		{
+			rememberContractItems(client.getItemContainer(InventoryID.INV));
+		}
+		else if (before != SessionState.IDLE && session.state() == SessionState.IDLE)
+		{
+			forgetScene();
+		}
+	}
+
+	/** The arena's tracked objects and the pending contract-name reads belong to the scene the player left. */
+	private void forgetScene()
+	{
+		translator.forgetObjects();
+		pendingWidgetReads.clear();
+	}
+
+	private void rememberContractItems(@Nullable ItemContainer inventory)
+	{
+		if (inventory == null)
+		{
+			return;
+		}
 		for (int itemId : EventTranslator.aggregate(inventory.getItems()).keySet())
 		{
 			if (isContractItem(itemId))

@@ -193,7 +193,7 @@ Events record observations with raw IDs. None of them contains a classification.
 | `NpcSpawnObserved` / `NpcDespawnObserved` (`npc-spawn`, `npc-despawn`) | actor, npcId, npcIndex; despawn also `dying` | `NpcSpawned` / `NpcDespawned` (`NpcUtil.isDying`) |
 | `NpcChangedObserved` (`npc-changed`) | actor, old id, new id | `NpcChanged` |
 | `ObjectSpawnObserved` / `ObjectDespawnObserved` (`object-spawn`, `object-despawn`) | objectId, position | `GameObjectSpawned` / `GameObjectDespawned` |
-| `ObjectAnimationObserved` (`object-animation`) | objectId, position, animationId | polled each tick for glyph-role objects (every dynamic object in capture mode); RuneLite has no event for object animations |
+| `ObjectAnimationObserved` (`object-animation`) | objectId, position, animationId | polled each tick for glyph-role objects (every dynamic object in capture mode) in the arena, forgotten on every scene load and on leaving; RuneLite has no event for object animations |
 | `OverheadTextObserved` (`overhead`) | actor, text | `OverheadTextChanged` of NPCs only; a player's overhead text is public chat and is never recorded, not even in capture mode |
 | `GameMessageObserved` (`game-message`) | text, with colour tags | `ChatMessage` of type `GAMEMESSAGE` (system messages only, never player chat) |
 | `VarbitObserved` (`varbit`) | varbitId, value | `VarbitChanged`, only varbits that have a role |
@@ -229,7 +229,7 @@ Events record observations with raw IDs. None of them contains a classification.
 - **Fight end:**
   - `YAMA_DIED`: `ActorDeath` of the Yama NPC captured at fight start, or its despawn while `NpcUtil.isDying` is true.
   - `PLAYER_DIED`: `ActorDeath` of the local player.
-  - `LEFT`: leaving the region, `LOGIN_SCREEN`, `HOPPING`, or the plugin shutting down.
+  - `LEFT`: leaving the region (judged only while the game state is `LOGGED_IN`, so a scene reload cannot end the fight), `LOGIN_SCREEN`, `HOPPING`, or the plugin shutting down.
   - The `END` supplies snapshot is taken as soon as the end is seen (before death drops items), and only while logged in. The end is then completed on the next game tick, after that tick's `TickState`, so the death recap includes the death tick. When no further tick will come (logout, shutdown) it completes immediately.
 - **Recording self-check:** if an NPC named "Yama" spawns with an ID that has no NPC role while armed, no kill can be recorded, so a report is written (section 9). Yama sitting on his throne (`NpcID.YAMA_THRONE_OCCUPIED`, role `YAMA_SITTING`) is also named "Yama" and is excluded.
 
@@ -328,7 +328,7 @@ Sources: the OSRS Wiki contract item pages and the "Contracts" section of Yama/S
 - A contract is used on Yama at his throne before the challenge and is consumed when the fight starts. One contract per fight. Only the contracts marked duo in 6.3.1 allow a partner.
 - **Detection** (`ContractProjection`), first match wins:
   1. `WidgetTextObserved` from `CONTRACT_NAME_WIDGET`, the contract plate shown during the fight, matched against the names in 6.3.1.
-  2. A `CONTRACT_ITEM_*` item leaving the inventory (`InventoryDelta`) in the 20 ticks before the fight started or its first 10 ticks. While armed, the recorder remembers contract items in the inventory, so a contract consumed at the challenge is recorded at fight start. Only the player who presented the contract sees this.
+  2. A `CONTRACT_ITEM_*` item leaving the inventory (`InventoryDelta`) in the 20 ticks before the fight started or its first 10 ticks. While armed, the recorder remembers contract items in the inventory (the inventory held on becoming armed, then on every tick and inventory change), so a contract consumed at the challenge is recorded at fight start. Only the player who presented the contract sees this.
   3. Standard attacks every 7 ticks in P1 (the contract cycle): `UNKNOWN_CONTRACT`. The common rules apply; contract-specific sections are hidden with reason `CONTRACT`.
   4. Otherwise `NONE`.
 - **Common rules under any contract:** the Judges start at 75% and 50% of Yama's health; Yama's base Defence is 247 and Magic 275, while drains keep the normal-form limits (6.9); P1/P2 standard attacks come every 7 ticks with two between specials; Shadow Waves and Fire Streaks are more frequent and hit harder; the Judge throws two fire bombs every 3 ticks; standard attacks hit up to 53.
