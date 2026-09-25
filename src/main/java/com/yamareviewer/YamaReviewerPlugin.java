@@ -22,6 +22,7 @@ import com.yamareviewer.adapter.recording.SnapshotReader;
 import com.yamareviewer.adapter.recording.TickSampler;
 import com.yamareviewer.adapter.ui.KillReviewOpener;
 import com.yamareviewer.adapter.ui.PanelIcon;
+import com.yamareviewer.adapter.ui.ReportProblemFooter;
 import com.yamareviewer.adapter.ui.ReviewPanel;
 import com.yamareviewer.adapter.ui.SystemClipboard;
 import com.yamareviewer.application.command.KillSession;
@@ -46,6 +47,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
@@ -105,6 +107,7 @@ public class YamaReviewerPlugin extends Plugin
 	private KillSession session;
 	private GameEventListener listener;
 	private NavigationButton navigationButton;
+	private ProblemReporter reporter;
 
 	@Provides
 	YamaReviewerConfig provideConfig(ConfigManager configManager)
@@ -128,7 +131,7 @@ public class YamaReviewerPlugin extends Plugin
 		ReviewRepository reviews = new GsonReviewRepository(files, gson);
 		ReviewBuilder builder = new ReviewBuilder(Projections.standard(), ids, Rules.DEFAULT);
 		ReportRepository reports = new FileReportRepository(files);
-		ProblemReporter reporter = new ProblemReporter(reports, ids,
+		reporter = new ProblemReporter(reports, ids,
 			() -> new Versions(VERSION, Objects.toString(RuneLiteProperties.getVersion(), "dev"), String.valueOf(client.getRevision())),
 			Clock.systemDefaultZone());
 
@@ -148,7 +151,9 @@ public class YamaReviewerPlugin extends Plugin
 		ActorResolver actors = new ActorResolver(client, ids, session::partnerName);
 		EventTranslator translator = new EventTranslator(ids, actors, session::currentTick, config::captureMode, items::name, positions);
 		listener = new GameEventListener(client, ids, session, translator, new TickSampler(client, actors, positions),
-			positions, npcUtil, handler::pending, id -> { });
+			positions, npcUtil, handler::pending, this::reportUnknownYama);
+
+		panel.attachFooter(new ReportProblemFooter(executor, reports, ProjectLinks.REPOSITORY_URL));
 
 		navigationButton = NavigationButton.builder()
 			.tooltip("Yama Reviewer")
@@ -187,5 +192,18 @@ public class YamaReviewerPlugin extends Plugin
 	private ReviewSettings reviewSettings()
 	{
 		return new ReviewSettings(config.priceSource(), config.modeOverride().mode());
+	}
+
+	/** Client thread → executor: the recording self-check of spec 5.3 writes its report off the client thread. */
+	private void reportUnknownYama(int npcId)
+	{
+		try
+		{
+			executor.submit(() -> reporter.reportUnknownYama(npcId));
+		}
+		catch (RejectedExecutionException e)
+		{
+			log.debug("Plugin stopped before the unknown-Yama report could be written");
+		}
 	}
 }

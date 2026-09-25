@@ -68,4 +68,10 @@ public class ArchitectureTest
 		.should().dependOnClassesThat().haveFullyQualifiedName("net.runelite.client.util.Filepath$Unchecked")
 		.orShould().dependOnClassesThat().haveFullyQualifiedName("java.io.File")
 		.orShould().dependOnClassesThat().haveFullyQualifiedName("java.nio.file.Files");
+
+	@ArchTest
+	public static final ArchRule onlyUiOpensLinksAndTheClipboard = noClasses()
+		.that().resideOutsideOfPackage("com.yamareviewer.adapter.ui..")
+		.should().dependOnClassesThat().haveFullyQualifiedName("net.runelite.client.util.LinkBrowser")
+		.orShould().dependOnClassesThat().resideInAPackage("java.awt.datatransfer..");
 }

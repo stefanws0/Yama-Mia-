@@ -31,6 +31,7 @@ public class ReviewPanel extends PluginPanel
 	private Consumer<String> killOpener = killId ->
 	{
 	};
+	private ReportProblemFooter reportFooter;
 
 	public ReviewPanel(Consumer<String> clipboard)
 	{
@@ -62,6 +63,25 @@ public class ReviewPanel extends PluginPanel
 		return footer;
 	}
 
+	/** Part 4: the "Report a problem" footer. Called once by the plugin, on the Swing thread, before the panel is shown. */
+	public void attachFooter(ReportProblemFooter reportFooter)
+	{
+		this.reportFooter = reportFooter;
+		footer.removeAll();
+		footer.add(reportFooter, BorderLayout.CENTER);
+		footer.revalidate();
+		reportFooter.refresh();
+	}
+
+	@Override
+	public void onActivate()
+	{
+		if (reportFooter != null)
+		{
+			reportFooter.refresh();
+		}
+	}
+
 	public void show(ReviewView view, String clipboardText, HistoryIndex history)
 	{
 		SwingUtilities.invokeLater(() ->
@@ -70,6 +90,10 @@ public class ReviewPanel extends PluginPanel
 			renderHistory(history);
 			tabs.setSelectedIndex(0);
 		});
+		if (reportFooter != null)
+		{
+			reportFooter.refresh();
+		}
 	}
 
 	public void showHistory(HistoryIndex history)
