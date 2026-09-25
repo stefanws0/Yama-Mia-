@@ -62,7 +62,14 @@ public final class GsonReviewRepository implements ReviewRepository
 				catch (IOException | RuntimeException e)
 				{
 					log.warn("Unreadable review {}, renaming it to .corrupt", path, e);
-					files.rename(path, path + ".corrupt");
+					try
+					{
+						files.rename(path, path + ".corrupt");
+					}
+					catch (IOException renameFailed)
+					{
+						log.warn("Could not rename {}; skipping it", path, renameFailed);
+					}
 				}
 			}
 		}

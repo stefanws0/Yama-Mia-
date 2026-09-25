@@ -101,6 +101,51 @@ public class GsonReviewRepositoryTest
 	}
 
 	@Test
+	public void aFailedRenameOfACorruptFileDoesNotStopTheLoad() throws IOException
+	{
+		FileStore renameFails = new FileStore()
+		{
+			@Override
+			public void write(String path, byte[] data)
+			{
+				files.write(path, data);
+			}
+
+			@Override
+			public byte[] read(String path) throws IOException
+			{
+				return files.read(path);
+			}
+
+			@Override
+			public List<String> list(String dir)
+			{
+				return files.list(dir);
+			}
+
+			@Override
+			public void delete(String path)
+			{
+				files.delete(path);
+			}
+
+			@Override
+			public void rename(String from, String to) throws IOException
+			{
+				throw new IOException("locked");
+			}
+		};
+		GsonReviewRepository locked = new GsonReviewRepository(renameFails, new Gson());
+		locked.save(review("older", 1_000L, Mode.SOLO, Contract.NONE));
+		files.write("reviews/SOLO/0000000002000-bad.json", "{not json".getBytes(StandardCharsets.UTF_8));
+		locked.save(review("newer", 3_000L, Mode.SOLO, Contract.NONE));
+		locked.save(review("duo", 4_000L, Mode.DUO_HOST, Contract.NONE));
+
+		assertEquals(List.of("duo", "newer", "older"), locked.loadAll().stream().map(KillReview::getKillId).collect(toList()));
+		assertTrue(files.paths().contains("reviews/SOLO/0000000002000-bad.json"));
+	}
+
+	@Test
 	public void anEmptyStoreLoadsNothing() throws IOException
 	{
 		assertEquals(List.of(), repository.loadAll());
