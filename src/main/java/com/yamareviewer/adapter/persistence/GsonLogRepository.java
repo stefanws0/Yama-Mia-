@@ -55,7 +55,14 @@ public final class GsonLogRepository implements LogRepository
 			catch (IOException | RuntimeException e)
 			{
 				log.warn("Unreadable raw log {}, renaming it to .corrupt", path, e);
-				files.rename(path, path + ".corrupt");
+				try
+				{
+					files.rename(path, path + ".corrupt");
+				}
+				catch (IOException renameFailed)
+				{
+					log.warn("Could not rename {}; skipping it", path, renameFailed);
+				}
 			}
 		}
 		return kills;

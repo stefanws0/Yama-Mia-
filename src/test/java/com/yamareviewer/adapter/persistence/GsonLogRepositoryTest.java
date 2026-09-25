@@ -81,6 +81,50 @@ public class GsonLogRepositoryTest
 	}
 
 	@Test
+	public void aFailedRenameOfACorruptFileDoesNotStopTheLoad() throws IOException
+	{
+		FileStore renameFails = new FileStore()
+		{
+			@Override
+			public void write(String path, byte[] data)
+			{
+				files.write(path, data);
+			}
+
+			@Override
+			public byte[] read(String path) throws IOException
+			{
+				return files.read(path);
+			}
+
+			@Override
+			public List<String> list(String dir)
+			{
+				return files.list(dir);
+			}
+
+			@Override
+			public void delete(String path)
+			{
+				files.delete(path);
+			}
+
+			@Override
+			public void rename(String from, String to) throws IOException
+			{
+				throw new IOException("locked");
+			}
+		};
+		GsonLogRepository locked = new GsonLogRepository(renameFails, codec);
+		locked.save(kill("older", 1_000));
+		files.write("raw/0000000002000-bad.jsonl.gz", new byte[]{1, 2, 3});
+		locked.save(kill("newer", 3_000));
+
+		assertEquals(List.of("newer", "older"), locked.loadAll().stream().map(k -> k.getHeader().getKillId()).collect(toList()));
+		assertTrue(files.paths().contains("raw/0000000002000-bad.jsonl.gz"));
+	}
+
+	@Test
 	public void otherSchemaVersionsAreSkippedButKept() throws IOException
 	{
 		repository.save(kill("current", 2_000));
