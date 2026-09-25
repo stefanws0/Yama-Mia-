@@ -2,6 +2,7 @@ package com.yamareviewer.domain.projection;
 
 import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.event.HitsplatObserved;
 import com.yamareviewer.domain.ids.Role;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.model.Phase;
@@ -107,5 +108,17 @@ public class WavesProjectionTest
 
 		assertEquals(Optional.of(HiddenReason.ERROR), projection.project(log, context).hiddenReason());
 		assertTrue(projection.project(log, TestContext.empty()).hiddenReason().isPresent());
+	}
+
+	@Test
+	public void aWaveHitOnYouCountsAlthoughItIsFlaggedMine()
+	{
+		KillLog log = Fights.throughToP3().ticks(3).waveOn(Actor.SELF).ticks(1).myHitOn(Actor.SELF, 14).ticks(3).end(EndReason.YAMA_DIED);
+
+		WaveSummary summary = waves(log, TestContext.withPhases(47));
+
+		assertTrue(log.eventsOf(HitsplatObserved.class).stream().filter(hit -> Actor.SELF.equals(hit.getTarget())).allMatch(HitsplatObserved::isMine));
+		assertEquals(List.of(new WaveHit(43, Phase.P3, Actor.SELF, true, 14, false)), summary.getWaves());
+		assertEquals(0, summary.dodged(Actor.SELF));
 	}
 }

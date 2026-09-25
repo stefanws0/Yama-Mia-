@@ -133,7 +133,8 @@ public class SilenceReplayTest
 		Hitsplat hitsplat = mock(Hitsplat.class);
 		when(hitsplat.getHitsplatType()).thenReturn(HitsplatID.DAMAGE_ME);
 		when(hitsplat.getAmount()).thenReturn(amount);
-		when(hitsplat.isMine()).thenReturn(false);
+		// DAMAGE_ME: RuneLite's isMine() is true for a hit the local player receives
+		when(hitsplat.isMine()).thenReturn(true);
 		HitsplatApplied event = new HitsplatApplied();
 		event.setActor(self);
 		event.setHitsplat(hitsplat);

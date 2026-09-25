@@ -2,6 +2,7 @@ package com.yamareviewer.domain.projection;
 
 import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.event.HitsplatObserved;
 import com.yamareviewer.domain.ids.Role;
 import com.yamareviewer.domain.model.KillLog;
 import com.yamareviewer.domain.model.Phase;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.Set;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 public class AttacksProjectionTest
@@ -129,5 +131,14 @@ public class AttacksProjectionTest
 
 		assertEquals(List.of(40, 49), List.of(timeline.getAttacks().get(0).getCastTick(), timeline.getAttacks().get(1).getCastTick()));
 		assertEquals(java.util.Optional.of(Style.RANGED), timeline.expectedStyle(1));
+	}
+
+	@Test
+	public void aHitOnYouIsTheLandingAlthoughItIsFlaggedMine()
+	{
+		KillLog log = Fights.throughToP3().yamaCasts(Style.RANGED).ticks(2).myHitOn(Actor.SELF, 7).ticks(5).end(EndReason.YAMA_DIED);
+
+		assertTrue(log.eventsOf(HitsplatObserved.class).stream().filter(hit -> Actor.SELF.equals(hit.getTarget())).allMatch(HitsplatObserved::isMine));
+		assertEquals(List.of(new Attack(40, Phase.P3, Style.RANGED, Actor.SELF, 42, 7)), attacksOf(log, TestContext.withPhases(47)));
 	}
 }

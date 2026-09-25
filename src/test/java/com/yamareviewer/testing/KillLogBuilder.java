@@ -117,10 +117,13 @@ public final class KillLogBuilder
 		return event(new GroundGraphicObserved(cursor, graphicId, new Position(x, y, 0)));
 	}
 
-	/** DAMAGE, or BLOCK when the amount is 0; mine = false. */
+	/**
+	 * DAMAGE, or BLOCK when the amount is 0, as a real log records it: a hit the local player receives is one of
+	 * the game's *_ME types, so mine = true when the target is SELF, false otherwise.
+	 */
 	public KillLogBuilder hitsplatOn(Actor target, int amount)
 	{
-		return hit(target, amount, false);
+		return hit(target, amount, Actor.SELF.equals(target));
 	}
 
 	/** The local player's own hit: mine = true. */

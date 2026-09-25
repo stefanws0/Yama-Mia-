@@ -130,7 +130,7 @@ public final class AttacksProjection implements Projection<AttackTimeline>
 		int to = impact == null ? cast + IMPACT_WINDOW : impact.getTick() + LANDING_AFTER_IMPACT;
 		for (HitsplatObserved hitsplat : hitsplats)
 		{
-			if (hitsplat.getTick() >= from && hitsplat.getTick() <= to && target.equals(hitsplat.getTarget()) && !hitsplat.isMine()
+			if (hitsplat.getTick() >= from && hitsplat.getTick() <= to && target.equals(hitsplat.getTarget())
 				&& (hitsplat.getKind() == HitsplatKind.DAMAGE || hitsplat.getKind() == HitsplatKind.BLOCK))
 			{
 				return hitsplat;

@@ -3,6 +3,7 @@ package com.yamareviewer.domain.health;
 import com.yamareviewer.domain.contract.ContractRules;
 import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.event.HitsplatObserved;
 import com.yamareviewer.domain.ids.PrayerCheck;
 import com.yamareviewer.domain.ids.Role;
 import com.yamareviewer.domain.ids.Rules;
@@ -108,5 +109,21 @@ public class BlockedDamageCheckTest
 		assertEquals("BlockedDamage", check.name());
 		assertEquals(List.of(Sections.PRAYER_REVIEW), check.hides());
 		assertEquals(Set.of(Role.IMPACT_MAGIC, Role.IMPACT_RANGED), check.reportRoles());
+	}
+
+	@Test
+	public void hitsOnYouFlaggedMineAreEvidence()
+	{
+		KillLogBuilder kill = CheckFights.soloUntilP3();
+		CheckFights.blockedAttacks(kill, 4);
+		CheckFights.attack(kill, Style.MAGIC, Actor.SELF, 12, CheckFights.correct(Style.MAGIC));
+		CheckFights.blockedAttacks(kill, 3);
+		CheckFights.attack(kill, Style.RANGED, Actor.SELF, 15, CheckFights.correct(Style.RANGED));
+		CheckFights.blockedAttacks(kill, 2);
+		KillLog log = CheckFights.finish(kill, EndReason.YAMA_DIED);
+
+		assertTrue(log.eventsOf(HitsplatObserved.class).stream().anyMatch(hit -> Actor.SELF.equals(hit.getTarget()) && hit.getAmount() > 0));
+		assertTrue(log.eventsOf(HitsplatObserved.class).stream().filter(hit -> Actor.SELF.equals(hit.getTarget())).allMatch(HitsplatObserved::isMine));
+		assertFalse(run(log).passed());
 	}
 }

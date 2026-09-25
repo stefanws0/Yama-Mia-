@@ -2,6 +2,7 @@ package com.yamareviewer.domain.projection;
 
 import com.yamareviewer.domain.event.Actor;
 import com.yamareviewer.domain.event.EndReason;
+import com.yamareviewer.domain.event.HitsplatObserved;
 import com.yamareviewer.domain.event.Position;
 import com.yamareviewer.domain.ids.Role;
 import com.yamareviewer.domain.model.KillLog;
@@ -128,5 +129,18 @@ public class CrashesProjectionTest
 		context.put(Sections.ATTACKS, Section.<AttackTimeline>hidden(HiddenReason.IDS_NOT_CAPTURED));
 
 		assertEquals(Optional.of(HiddenReason.IDS_NOT_CAPTURED), projection.project(log, context).hiddenReason());
+	}
+
+	@Test
+	public void aCrashHitOnYouCountsAlthoughItIsFlaggedMine()
+	{
+		KillLog log = Fights.throughToP3().ticks(3).crashLine(3200, 3205).ticks(1).myHitOn(Actor.SELF, 11).ticks(3).end(EndReason.YAMA_DIED);
+
+		CrashSummary summary = crashes(log, TestContext.withPhases(47));
+
+		assertTrue(log.eventsOf(HitsplatObserved.class).stream().filter(hit -> Actor.SELF.equals(hit.getTarget())).allMatch(HitsplatObserved::isMine));
+		assertTrue(summary.getLines().get(0).isHit());
+		assertEquals(11, summary.damage(Actor.SELF));
+		assertEquals(0, summary.dodged(Actor.SELF));
 	}
 }

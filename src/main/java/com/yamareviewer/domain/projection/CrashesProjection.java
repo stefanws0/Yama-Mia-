@@ -134,10 +134,13 @@ public final class CrashesProjection implements Projection<CrashSummary>
 		return keys;
 	}
 
-	/** A damage hitsplat Yama's mechanics dealt to the player: not yours, not a standard attack's landing. */
+	/**
+	 * A damage hitsplat Yama's mechanics dealt to the player, other than a standard attack's landing. isMine() is not
+	 * consulted: a hit the local player receives is one of the game's *_ME types, so it is "mine" too.
+	 */
 	static boolean isMechanicDamage(HitsplatObserved hitsplat, Actor player, Set<String> standardLandings)
 	{
-		return player.equals(hitsplat.getTarget()) && !hitsplat.isMine() && hitsplat.getKind() == HitsplatKind.DAMAGE
+		return player.equals(hitsplat.getTarget()) && hitsplat.getKind() == HitsplatKind.DAMAGE
 			&& !standardLandings.contains(hitsplat.getTick() + "/" + player.getKind());
 	}
 

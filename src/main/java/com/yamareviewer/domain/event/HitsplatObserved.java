@@ -10,6 +10,9 @@ public class HitsplatObserved implements DomainEvent
 	HitsplatKind kind;
 	int amount;
 	int rawType;
-	/** True when the local player dealt this hitsplat (RuneLite's Hitsplat.isMine()). */
+	/**
+	 * RuneLite's Hitsplat.isMine(): true for the game's *_ME types, which mark every hitsplat involving the local
+	 * player, dealt or received. It means "dealt by you" only on a hitsplat on an NPC.
+	 */
 	boolean mine;
 }

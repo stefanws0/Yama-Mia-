@@ -117,10 +117,11 @@ public class KillLogBuilderTest
 	@Test
 	public void hitsplatsCarryKindAndOwnership()
 	{
-		KillLog kill = KillLogBuilder.kill().hitsplatOn(Actor.SELF, 7).hitsplatOn(Actor.YAMA, 0).myHitOn(Actor.YAMA, 30).yamaHealed(12).build();
+		KillLog kill = KillLogBuilder.kill().hitsplatOn(Actor.SELF, 7).hitsplatOn(Actor.PARTNER, 4).hitsplatOn(Actor.YAMA, 0).myHitOn(Actor.YAMA, 30).yamaHealed(12).build();
 
 		assertEquals(List.of(
-			new HitsplatObserved(0, Actor.SELF, HitsplatKind.DAMAGE, 7, KillLogBuilder.RAW_DAMAGE, false),
+			new HitsplatObserved(0, Actor.SELF, HitsplatKind.DAMAGE, 7, KillLogBuilder.RAW_DAMAGE, true),
+			new HitsplatObserved(0, Actor.PARTNER, HitsplatKind.DAMAGE, 4, KillLogBuilder.RAW_DAMAGE, false),
 			new HitsplatObserved(0, Actor.YAMA, HitsplatKind.BLOCK, 0, KillLogBuilder.RAW_BLOCK, false),
 			new HitsplatObserved(0, Actor.YAMA, HitsplatKind.DAMAGE, 30, KillLogBuilder.RAW_DAMAGE, true),
 			new HitsplatObserved(0, Actor.YAMA, HitsplatKind.HEAL, 12, KillLogBuilder.RAW_HEAL, false)),
